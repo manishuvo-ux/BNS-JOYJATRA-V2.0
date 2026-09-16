@@ -452,7 +452,7 @@
     </div>
   </div>
   <nav class="tabs">
-    <button data-tab="dashboard" class="active">Muster Dashboard</button>
+    <button data-tab="dashboard" class="active">Main Dashboard</button>
     <button data-tab="roster">Ship's Company (Roster)</button>
     <button data-tab="history">Individual History</button>
     <button data-tab="summary">Monthly Summary</button>
@@ -483,7 +483,9 @@
         </div>
       </div>
       <div class="panel-body">
-        <div id="dashSummaryStrip" class="summary-grid" style="margin-bottom:16px;"></div>
+        <div id="dashSummaryStrip" class="summary-grid" style="margin-bottom:10px;"></div>
+        <p class="muted" style="margin:0 0 6px 0;">Breakdown</p>
+        <div id="dashBreakdownStrip" class="summary-grid" style="margin-bottom:16px;"></div>
         <div style="overflow-x:auto;">
           <table id="dashTable">
             <thead>
@@ -524,9 +526,15 @@
     <div class="panel">
       <div class="panel-head">
         <h2>Individual History</h2>
-        <div class="field">
-          <label class="field-label">Select sailor</label>
-          <select id="historySailorSelect"><option value="">— choose —</option></select>
+        <div class="toolbar">
+          <div class="field">
+            <label class="field-label">Search</label>
+            <input type="text" id="historySearch" class="search-input" placeholder="Name, O No, rank...">
+          </div>
+          <div class="field">
+            <label class="field-label">Select sailor</label>
+            <select id="historySailorSelect"><option value="">— choose —</option></select>
+          </div>
         </div>
       </div>
       <div class="panel-body">
@@ -640,7 +648,7 @@ const DEPARTMENTS = ["Navigation (Helmsman)","Navigation (Nav Equipt)","Navigati
 "Engineering (Engine Room)","Engineering (Cabin Support System)","Electrical (Electrotec)","Electrical (Navigation)","Support Crew"];
 
 const LEAVE_MAX = { PL:60, CL:10, RL:15, ML:28 };
-const LEAVE_NAMES = { PL:"Privilege Leave", CL:"Casual Leave", RL:"Recreation Leave", ML:"Medical Leave", SL:"Short Leave" };
+const SICK_DURATION_MAX = 90;
 const SICK_SUBTYPES = ["S-Report","Att 'C'","PPGF","Uni Ex","Admit"];
 
 let roster = [];          // [{id,oNo,name,rank,department,order}]
@@ -898,6 +906,7 @@ async function renderDashboard(){
     tbody.innerHTML = '';
     emptyEl.style.display='';
     document.getElementById('dashSummaryStrip').innerHTML = '';
+    document.getElementById('dashBreakdownStrip').innerHTML = '';
     return;
   }
   emptyEl.style.display='none';
@@ -905,7 +914,8 @@ async function renderDashboard(){
   const byDept = sortedRosterByDept();
 
   let rows = '';
-  let presentCount=0, awayCount=0, assumedCount=0;
+  let presentCount=0, awayCount=0;
+  const bd = { PL:0, CL:0, RL:0, ML:0, SL:0, Ty:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0, Other:0 };
 
   for(const dept of DEPARTMENTS){
     let list = (byDept[dept]||[]).filter(s=>{
@@ -920,8 +930,20 @@ async function renderDashboard(){
     rows += `<tr class="dept-heading"><td colspan="6">${escapeHtml(dept)} — ${list.length}</td></tr>`;
     for(const s of list){
       const st = await resolveStatus(s.id, date);
-      if(st.status==='Present'){ presentCount++; if(st.isDefault) assumedCount++; }
-      else if(st.status==='Away') awayCount++;
+      if(st.status==='Present'){ presentCount++; }
+      else if(st.status==='Away'){
+        awayCount++;
+        if(st.category==='Leave' && bd[st.subType]!==undefined) bd[st.subType]++;
+        else if(st.category==='Ty') bd.Ty++;
+        else if(st.category==='Sick'){
+          if(st.subType==='S-Report') bd.SReport++;
+          else if(st.subType==="Att 'C'") bd.AttC++;
+          else if(st.subType==='PPGF') bd.PPGF++;
+          else if(st.subType==='Uni Ex') bd.UniEx++;
+          else if(st.subType==='Admit') bd.Admit++;
+        }
+        else if(st.category==='Other') bd.Other++;
+      }
       const badgeClass = st.status==='Present'?'present':(st.status==='Away'?'away':'pending');
       const updateBtn = canEnterData() ? `<button class="btn secondary" data-update="${s.id}">Update</button>` : '';
       const detailText = st.isDefault
@@ -943,7 +965,20 @@ async function renderDashboard(){
     <div class="summary-card"><div class="num">${roster.length}</div><div class="lbl">Ship's company</div></div>
     <div class="summary-card"><div class="num">${presentCount}</div><div class="lbl">Present</div></div>
     <div class="summary-card"><div class="num">${awayCount}</div><div class="lbl">Away</div></div>
-    <div class="summary-card"><div class="num">${assumedCount}</div><div class="lbl">Present, not confirmed</div></div>
+  `;
+  document.getElementById('dashBreakdownStrip').innerHTML = `
+    <div class="summary-card"><div class="num">${bd.PL}</div><div class="lbl">PL</div></div>
+    <div class="summary-card"><div class="num">${bd.CL}</div><div class="lbl">CL</div></div>
+    <div class="summary-card"><div class="num">${bd.RL}</div><div class="lbl">RL</div></div>
+    <div class="summary-card"><div class="num">${bd.ML}</div><div class="lbl">ML</div></div>
+    <div class="summary-card"><div class="num">${bd.SL}</div><div class="lbl">SL</div></div>
+    <div class="summary-card"><div class="num">${bd.Ty}</div><div class="lbl">Ty</div></div>
+    <div class="summary-card"><div class="num">${bd.SReport}</div><div class="lbl">S-Report</div></div>
+    <div class="summary-card"><div class="num">${bd.AttC}</div><div class="lbl">Att 'C'</div></div>
+    <div class="summary-card"><div class="num">${bd.PPGF}</div><div class="lbl">PPGF</div></div>
+    <div class="summary-card"><div class="num">${bd.UniEx}</div><div class="lbl">Uni Ex</div></div>
+    <div class="summary-card"><div class="num">${bd.Admit}</div><div class="lbl">Admit</div></div>
+    <div class="summary-card"><div class="num">${bd.Other}</div><div class="lbl">Other</div></div>
   `;
 
   tbody.querySelectorAll('[data-update]').forEach(btn=>{
@@ -973,20 +1008,20 @@ async function resolveStatus(sailorId, date){
 
 function rangeToStatus(r){
   if(r.category==='Leave'){
-    let detail = `${LEAVE_NAMES[r.subType]||r.subType} (${fmtDate(r.start)} – ${fmtDate(r.end)}, ${r.days||daysBetween(r.start,r.end)+1}d)`;
+    let detail = `${r.subType} (${fmtDate(r.start)} – ${fmtDate(r.end)}, ${r.days||daysBetween(r.start,r.end)+1}d)`;
     if(r.gxs) detail += ` · GXS: ${r.gxs}${r.gxsDate? ' on '+fmtDate(r.gxsDate):''}`;
-    return { status:'Away', label:'Leave · '+r.subType, detail };
+    return { status:'Away', label:'Leave · '+r.subType, detail, category:'Leave', subType:r.subType };
   }
   if(r.category==='Ty'){
-    return { status:'Away', label:'TY (Temporary Duty)', detail:`${r.location||''} (${fmtDate(r.start)} – ${fmtDate(r.end)})` };
+    return { status:'Away', label:'Ty', detail:`${r.location||''} (${fmtDate(r.start)} – ${fmtDate(r.end)})`, category:'Ty' };
   }
   if(r.category==='Sick'){
     let detail = `${r.subType} (${fmtDate(r.start)} – ${fmtDate(r.end)})`;
     if(r.location) detail += ` · ${r.location}`;
     if(r.reason) detail += ` · ${r.reason}`;
-    return { status:'Away', label:'Sick · '+r.subType, detail };
+    return { status:'Away', label:'Sick · '+r.subType, detail, category:'Sick', subType:r.subType };
   }
-  return { status:'Away', label:r.category, detail:'' };
+  return { status:'Away', label:r.category, detail:'', category:r.category };
 }
 
 /* ====================================================================
@@ -1019,7 +1054,7 @@ function statusFormHtml(date){
     <div id="f_presentBlock" style="display:none;">
       <div class="field">
         <label class="field-label">Duty / task (optional)</label>
-        <input type="text" id="f_task" placeholder="e.g. Bridge watch, Engine room maintenance">
+        <input type="text" id="f_task" placeholder="Dept Work">
       </div>
     </div>
     <div id="f_awayBlock" style="display:none;">
@@ -1027,7 +1062,7 @@ function statusFormHtml(date){
         <label class="field-label">Away type</label>
         <select id="f_awayType">
           <option value="Leave">Leave</option>
-          <option value="Ty">TY (Temporary Duty)</option>
+          <option value="Ty">Ty</option>
           <option value="Sick">Sick</option>
           <option value="Other">Other</option>
         </select>
@@ -1062,11 +1097,11 @@ function wireStatusForm(){
         <div class="field">
           <label class="field-label">Leave type</label>
           <select id="f_leaveType">
-            <option value="PL">PL — Privilege Leave</option>
-            <option value="CL">CL — Casual Leave</option>
-            <option value="RL">RL — Recreation Leave</option>
-            <option value="ML">ML — Medical Leave</option>
-            <option value="SL">SL — Short Leave</option>
+            <option value="PL">PL</option>
+            <option value="CL">CL</option>
+            <option value="RL">RL</option>
+            <option value="ML">ML</option>
+            <option value="SL">SL</option>
           </select>
         </div>
         <div id="f_leaveSub" style="margin-top:12px;"></div>
@@ -1165,11 +1200,23 @@ function wireStatusForm(){
           <input type="text" id="f_sick_location" placeholder="e.g. CMH Dhaka">
         </div>`;
     } else {
+      let opts='';
+      for(let i=1;i<=SICK_DURATION_MAX;i++) opts += `<option value="${i}">${i} day${i>1?'s':''}</option>`;
       box.innerHTML = `
         <div class="field-row">
+          <div class="field"><label class="field-label">Duration</label><select id="f_sick_days">${opts}</select></div>
           <div class="field"><label class="field-label">From date</label><input type="date" id="f_sick_from" value="${date}"></div>
-          <div class="field"><label class="field-label">To date</label><input type="date" id="f_sick_to"></div>
+          <div class="field"><label class="field-label">To date (auto)</label><input type="date" id="f_sick_to" disabled></div>
         </div>`;
+      const daysSel = document.getElementById('f_sick_days');
+      const fromInp = document.getElementById('f_sick_from');
+      const toInp = document.getElementById('f_sick_to');
+      function recalcSickEnd(){
+        if(fromInp.value) toInp.value = addDays(fromInp.value, parseInt(daysSel.value,10)-1);
+      }
+      daysSel.addEventListener('change', recalcSickEnd);
+      fromInp.addEventListener('change', recalcSickEnd);
+      recalcSickEnd();
     }
   }
 
@@ -1387,13 +1434,21 @@ document.getElementById('sailorDeleteBtn').addEventListener('click', async ()=>{
 function populateHistorySelect(){
   const sel = document.getElementById('historySailorSelect');
   const current = sel.value;
-  const sorted = [...roster].sort((a,b)=>a.name.localeCompare(b.name));
+  const filter = (document.getElementById('historySearch').value||'').trim().toLowerCase();
+  const sorted = [...roster]
+    .filter(s=>{
+      if(!filter) return true;
+      const hay = (s.oNo+' '+s.name+' '+s.rank).toLowerCase();
+      return hay.includes(filter);
+    })
+    .sort((a,b)=>a.name.localeCompare(b.name));
   sel.innerHTML = '<option value="">— choose —</option>' + sorted.map(s=>
     `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.oNo)}, ${escapeHtml(s.rank)})</option>`
   ).join('');
-  if(current) sel.value = current;
+  if(current && sorted.some(s=>s.id===current)) sel.value = current;
 }
 function renderHistorySelect(){ populateHistorySelect(); }
+document.getElementById('historySearch').addEventListener('input', populateHistorySelect);
 
 document.getElementById('historySailorSelect').addEventListener('change', async (e)=>{
   const sailorId = e.target.value;
