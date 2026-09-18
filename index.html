@@ -594,6 +594,7 @@
     </div>
     <div class="modal-body" id="statusModalBody"></div>
     <div class="modal-foot">
+      <button class="btn danger" id="statusDeleteBtn" style="display:none; margin-right:auto;">Delete record</button>
       <button class="btn secondary" id="statusModalCancel">Cancel</button>
       <button class="btn" id="statusModalSave">Save</button>
     </div>
@@ -640,7 +641,8 @@
 
 const RANKS = ["MCPO(X)","SCPO(X)","CPO","PO","LS","AB","MCPO(COM)","SCPO(COM)","CRS(G)","PORS(G)","LRO(G)","RO(G)-I",
 "MCPO(E)","CERA","ERA-I","ERA-II","ERA-III","ERA-IV","LME","ME-I","MCPO(SW)","CERA(S)","ERA-I(S)","ERA-II(S)","ERA-III(S)","ERA-IV(S)","LME(S)","ME-I(S)",
-"MCPO(L)","CEA","EA-I","EA-II","EA-III","EA-IV","LEN","EN-I","MCPO(R)","CREA","REA-I","REA-II","REA-III","REA-IV","LREN","REN-I","CPO(MED)","PO(MED)","LMA","MA-I","PO(WTR)","LWTR","WTR-I",
+"MCPO(L)","CEA","EA-I","EA-II","EA-III","EA-IV","LEN","EN-I","MCPO(R)","CREA","REA-I","REA-II","REA-III","REA-IV","LREN","REN-I",
+"CPO(MED)","PO(MED)","LMA","MA-I","PO(WTR)","LWTR","WTR-I",
 "PO(S)","LSA","SA-I","PO(CK)","LCK","CK-I","PO(STW)","LSTW","STW-I","LTOP","TOP-I","LNP","NP-I"];
 
 const DEPARTMENTS = ["Navigation (Helmsman)","Navigation (Nav Equipt)","Navigation (Radar ESM)","Navigation (Sonar)",
@@ -664,9 +666,16 @@ let currentUser = null;   // in-memory session only (no persistent browser stora
 
 /* ---------------------- Utilities ---------------------- */
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
+// Local-date helpers. Deliberately avoid toISOString() for date-only math:
+// it converts to UTC, which silently shifts the date backward by a day for
+// timezones ahead of UTC (like Bangladesh, UTC+6) — that was the cause of
+// leave durations showing one day short.
+function pad2(n){ return String(n).padStart(2,'0'); }
+function toDateStr(dt){
+  return `${dt.getFullYear()}-${pad2(dt.getMonth()+1)}-${pad2(dt.getDate())}`;
+}
 function todayStr(){
-  const d = new Date();
-  return new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,10);
+  return toDateStr(new Date());
 }
 function fmtDate(d){
   if(!d) return "";
@@ -676,7 +685,7 @@ function fmtDate(d){
 function addDays(dateStr, n){
   const dt = new Date(dateStr+"T00:00:00");
   dt.setDate(dt.getDate()+n);
-  return dt.toISOString().slice(0,10);
+  return toDateStr(dt);
 }
 function daysBetween(a,b){
   return Math.round((new Date(b+"T00:00:00") - new Date(a+"T00:00:00"))/86400000);
@@ -881,7 +890,10 @@ function rankOptionsHtml(selected){
 
 function initDashboardFilters(){
   const sel = document.getElementById('dashDeptFilter');
-  sel.innerHTML = '<option value="">All departments</option>' + deptOptionsHtml(null).replace(/selected/,'');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All departments</option>' +
+    orderedDeptNames().map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(current) sel.value = current;
 }
 
 function sortedRosterByDept(){
@@ -890,6 +902,14 @@ function sortedRosterByDept(){
   roster.forEach(s=>{ (byDept[s.department] = byDept[s.department]||[]).push(s); });
   Object.values(byDept).forEach(list=>list.sort((a,b)=>(a.order||0)-(b.order||0)));
   return byDept;
+}
+// Includes any department names already saved on a sailor that no longer
+// match the official DEPARTMENTS list (e.g. after a department was
+// renamed), so nobody silently disappears from the roster/dashboard.
+function orderedDeptNames(){
+  const known = new Set(DEPARTMENTS);
+  const extra = [...new Set(roster.map(s=>s.department).filter(d=>d && !known.has(d)))].sort();
+  return [...DEPARTMENTS, ...extra];
 }
 
 async function renderDashboard(){
@@ -917,7 +937,7 @@ async function renderDashboard(){
   let presentCount=0, awayCount=0;
   const bd = { PL:0, CL:0, RL:0, ML:0, SL:0, Ty:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0, Other:0 };
 
-  for(const dept of DEPARTMENTS){
+  for(const dept of orderedDeptNames()){
     let list = (byDept[dept]||[]).filter(s=>{
       if(deptFilter && s.department!==deptFilter) return false;
       if(search){
@@ -945,7 +965,13 @@ async function renderDashboard(){
         else if(st.category==='Other') bd.Other++;
       }
       const badgeClass = st.status==='Present'?'present':(st.status==='Away'?'away':'pending');
-      const updateBtn = canEnterData() ? `<button class="btn secondary" data-update="${s.id}">Update</button>` : '';
+      const hasRecord = !st.isDefault;
+      let updateBtn = '';
+      if(canEnterData()){
+        updateBtn = (hasRecord && !isAdmin())
+          ? '<span class="muted" style="font-size:12px;">Locked (Admin only)</span>'
+          : `<button class="btn secondary" data-update="${s.id}">Update</button>`;
+      }
       const detailText = st.isDefault
         ? 'Not confirmed — assumed present'
         : (st.detail||(st.status==='Present' && st.task ? st.task : ''));
@@ -1030,15 +1056,63 @@ function rangeToStatus(r){
 const statusBackdrop = document.getElementById('statusModalBackdrop');
 const statusBody = document.getElementById('statusModalBody');
 
+async function getExistingRecord(sailorId, date){
+  const r = ranges.find(x => x.sailorId===sailorId && date>=x.start && date<=x.end);
+  if(r) return { source:'range', range:r };
+  const log = await getDailyLog(date);
+  const rec = log[sailorId];
+  if(rec) return { source:'daily', daily:rec };
+  return null;
+}
+
+// Normalizes a stored range/daily record into the flat shape the entry
+// form's prefill logic reads.
+function normalizeExisting(existing){
+  if(!existing) return null;
+  if(existing.source==='range'){
+    const r = existing.range;
+    if(r.category==='Leave'){
+      return { status:'Away', awayType:'Leave', leaveType:r.subType, days:r.days, start:r.start, gxs:r.gxs||'', gxsDate:r.gxsDate||'' };
+    }
+    if(r.category==='Ty'){
+      return { status:'Away', awayType:'Ty', tyFrom:r.start, tyTo:r.end, tyLocation:r.location||'' };
+    }
+    if(r.category==='Sick'){
+      return { status:'Away', awayType:'Sick', sickSub:r.subType, sickReason:r.reason||'', sickFrom:r.start, sickTo:r.end, sickLocation:r.location||'', sickDays: daysBetween(r.start,r.end)+1 };
+    }
+    return { status:'Away', awayType:'Other', otherReason:r.reason||'' };
+  }
+  const d = existing.daily;
+  if(d.status==='Present'){
+    return { status:'Present', task:d.task||'' };
+  }
+  if(d.category==='Leave' && d.subType==='SL'){
+    return { status:'Away', awayType:'Leave', leaveType:'SL', slReason:d.reason||'' };
+  }
+  if(d.category==='Sick' && d.subType==='S-Report'){
+    return { status:'Away', awayType:'Sick', sickSub:'S-Report', sickReason:d.reason||'' };
+  }
+  if(d.category==='Other'){
+    return { status:'Away', awayType:'Other', otherReason:d.reason||'' };
+  }
+  return { status: d.status||'Present' };
+}
+
 async function openStatusModal(sailorId, date){
   if(!canEnterData()) return;
+  const existing = await getExistingRecord(sailorId, date);
+  if(existing && !isAdmin()){
+    alert("এই দিনের তথ্য ইতিমধ্যে এন্ট্রি করা আছে। শুধুমাত্র Admin এটি এডিট বা মুছতে পারবেন — সংশোধন প্রয়োজন হলে আপনার Admin-কে জানান।");
+    return;
+  }
   editingDashSailorId = sailorId;
   const sailor = roster.find(s=>s.id===sailorId);
   if(!sailor) return;
   document.getElementById('statusModalTitle').textContent = `${sailor.name} — ${fmtDate(date)}`;
 
   statusBody.innerHTML = statusFormHtml(date);
-  wireStatusForm();
+  wireStatusForm(normalizeExisting(existing));
+  document.getElementById('statusDeleteBtn').style.display = (existing && isAdmin()) ? '' : 'none';
   statusBackdrop.style.display = 'flex';
 }
 
@@ -1073,7 +1147,7 @@ function statusFormHtml(date){
   `;
 }
 
-function wireStatusForm(){
+function wireStatusForm(ed){
   const statusSel = document.getElementById('f_status');
   const presentBlock = document.getElementById('f_presentBlock');
   const awayBlock = document.getElementById('f_awayBlock');
@@ -1107,23 +1181,26 @@ function wireStatusForm(){
         <div id="f_leaveSub" style="margin-top:12px;"></div>
       `;
       document.getElementById('f_leaveType').addEventListener('change', renderLeaveSub);
+      if(ed && ed.awayType==='Leave' && ed.leaveType) document.getElementById('f_leaveType').value = ed.leaveType;
       renderLeaveSub();
     } else if(t==='Ty'){
+      const p = (ed && ed.awayType==='Ty') ? ed : null;
       awaySub.innerHTML = `
         <div class="field-row">
-          <div class="field"><label class="field-label">From date</label><input type="date" id="f_ty_from" value="${date}"></div>
-          <div class="field"><label class="field-label">To date</label><input type="date" id="f_ty_to"></div>
+          <div class="field"><label class="field-label">From date</label><input type="date" id="f_ty_from" value="${p?p.tyFrom:date}"></div>
+          <div class="field"><label class="field-label">To date</label><input type="date" id="f_ty_to" value="${p?(p.tyTo||''):''}"></div>
         </div>
         <div class="field" style="margin-top:12px;">
           <label class="field-label">Location</label>
-          <input type="text" id="f_ty_location" placeholder="e.g. NHQ Dhaka">
+          <input type="text" id="f_ty_location" placeholder="e.g. NHQ Dhaka" value="${escapeHtml(p?(p.tyLocation||''):'')}">
         </div>
       `;
     } else if(t==='Sick'){
+      const p = (ed && ed.awayType==='Sick') ? ed : null;
       awaySub.innerHTML = `
         <div class="field">
           <label class="field-label">Reason</label>
-          <input type="text" id="f_sick_reason" placeholder="Brief reason">
+          <input type="text" id="f_sick_reason" placeholder="Brief reason" value="${escapeHtml(p?(p.sickReason||''):'')}">
         </div>
         <div class="field" style="margin-top:12px;">
           <label class="field-label">Sick category</label>
@@ -1134,12 +1211,14 @@ function wireStatusForm(){
         <div id="f_sick_dates" style="margin-top:12px;"></div>
       `;
       document.getElementById('f_sick_sub').addEventListener('change', renderSickDates);
+      if(p && p.sickSub) document.getElementById('f_sick_sub').value = p.sickSub;
       renderSickDates();
     } else if(t==='Other'){
+      const p = (ed && ed.awayType==='Other') ? ed : null;
       awaySub.innerHTML = `
         <div class="field">
           <label class="field-label">Reason</label>
-          <input type="text" id="f_other_reason" placeholder="Brief reason">
+          <input type="text" id="f_other_reason" placeholder="Brief reason" value="${escapeHtml(p?(p.otherReason||''):'')}">
         </div>
       `;
     }
@@ -1148,11 +1227,12 @@ function wireStatusForm(){
   function renderLeaveSub(){
     const lt = document.getElementById('f_leaveType').value;
     const sub = document.getElementById('f_leaveSub');
+    const prefillThis = ed && ed.awayType==='Leave' && ed.leaveType===lt;
     if(lt==='SL'){
       sub.innerHTML = `
         <div class="field">
           <label class="field-label">Reason</label>
-          <input type="text" id="f_sl_reason" placeholder="Brief reason">
+          <input type="text" id="f_sl_reason" placeholder="Brief reason" value="${escapeHtml(prefillThis?(ed.slReason||''):'')}">
         </div>`;
       return;
     }
@@ -1162,16 +1242,17 @@ function wireStatusForm(){
     sub.innerHTML = `
       <div class="field-row">
         <div class="field"><label class="field-label">Duration</label><select id="f_leave_days">${opts}</select></div>
-        <div class="field"><label class="field-label">Start date</label><input type="date" id="f_leave_start" value="${date}"></div>
+        <div class="field"><label class="field-label">Start date</label><input type="date" id="f_leave_start" value="${prefillThis?ed.start:date}"></div>
         <div class="field"><label class="field-label">End date (auto)</label><input type="date" id="f_leave_end" disabled></div>
       </div>
       ${lt!=='ML' ? `
       <div class="field-row" style="margin-top:12px;">
-        <div class="field"><label class="field-label">GXS</label><input type="text" id="f_gxs" placeholder="GXS reference"></div>
-        <div class="field"><label class="field-label">GXS date</label><input type="date" id="f_gxs_date"></div>
+        <div class="field"><label class="field-label">GXS</label><input type="text" id="f_gxs" placeholder="GXS reference" value="${prefillThis?escapeHtml(ed.gxs||''):''}"></div>
+        <div class="field"><label class="field-label">GXS date</label><input type="date" id="f_gxs_date" value="${prefillThis?(ed.gxsDate||''):''}"></div>
       </div>` : ''}
     `;
     const daysSel = document.getElementById('f_leave_days');
+    if(prefillThis && ed.days) daysSel.value = ed.days;
     const startInp = document.getElementById('f_leave_start');
     const endInp = document.getElementById('f_leave_end');
     function recalcEnd(){
@@ -1187,17 +1268,18 @@ function wireStatusForm(){
   function renderSickDates(){
     const sub = document.getElementById('f_sick_sub').value;
     const box = document.getElementById('f_sick_dates');
+    const prefillThis = ed && ed.awayType==='Sick' && ed.sickSub===sub;
     if(sub==='S-Report'){
       box.innerHTML = `<p class="muted">S-Report is logged for this date only.</p>`;
     } else if(sub==='Admit'){
       box.innerHTML = `
         <div class="field-row">
-          <div class="field"><label class="field-label">From date</label><input type="date" id="f_sick_from" value="${date}"></div>
-          <div class="field"><label class="field-label">To date</label><input type="date" id="f_sick_to"></div>
+          <div class="field"><label class="field-label">From date</label><input type="date" id="f_sick_from" value="${prefillThis?ed.sickFrom:date}"></div>
+          <div class="field"><label class="field-label">To date</label><input type="date" id="f_sick_to" value="${prefillThis?(ed.sickTo||''):''}"></div>
         </div>
         <div class="field" style="margin-top:12px;">
           <label class="field-label">Location (hospital/facility)</label>
-          <input type="text" id="f_sick_location" placeholder="e.g. CMH Dhaka">
+          <input type="text" id="f_sick_location" placeholder="e.g. CMH Dhaka" value="${prefillThis?escapeHtml(ed.sickLocation||''):''}">
         </div>`;
     } else {
       let opts='';
@@ -1205,10 +1287,11 @@ function wireStatusForm(){
       box.innerHTML = `
         <div class="field-row">
           <div class="field"><label class="field-label">Duration</label><select id="f_sick_days">${opts}</select></div>
-          <div class="field"><label class="field-label">From date</label><input type="date" id="f_sick_from" value="${date}"></div>
+          <div class="field"><label class="field-label">From date</label><input type="date" id="f_sick_from" value="${prefillThis?ed.sickFrom:date}"></div>
           <div class="field"><label class="field-label">To date (auto)</label><input type="date" id="f_sick_to" disabled></div>
         </div>`;
       const daysSel = document.getElementById('f_sick_days');
+      if(prefillThis && ed.sickDays) daysSel.value = ed.sickDays;
       const fromInp = document.getElementById('f_sick_from');
       const toInp = document.getElementById('f_sick_to');
       function recalcSickEnd(){
@@ -1220,13 +1303,35 @@ function wireStatusForm(){
     }
   }
 
-  statusSel.value = 'Present';
+  if(ed && ed.status==='Away' && ed.awayType){
+    awayTypeSel.value = ed.awayType;
+  }
+  statusSel.value = ed ? ed.status : 'Present';
   refreshTop();
+  if(ed && ed.status==='Present'){
+    document.getElementById('f_task').value = ed.task||'';
+  }
 }
 
 document.getElementById('statusModalClose').addEventListener('click', closeStatusModal);
 document.getElementById('statusModalCancel').addEventListener('click', closeStatusModal);
 function closeStatusModal(){ statusBackdrop.style.display='none'; editingDashSailorId=null; }
+
+document.getElementById('statusDeleteBtn').addEventListener('click', async ()=>{
+  if(!isAdmin() || !editingDashSailorId) return;
+  const sailorId = editingDashSailorId;
+  const date = document.getElementById('f_date').value;
+  if(!confirm('Delete this record? The sailor will revert to the default Present status for this date unless another record still applies.')) return;
+  ranges = ranges.filter(r => !(r.sailorId===sailorId && date>=r.start && date<=r.end));
+  await saveRanges();
+  const log = await getDailyLog(date);
+  if(log[sailorId]){
+    delete log[sailorId];
+    await saveDailyLog(date, log);
+  }
+  closeStatusModal();
+  renderDashboard();
+});
 
 document.getElementById('statusModalSave').addEventListener('click', async ()=>{
   if(!canEnterData()) return;
@@ -1312,7 +1417,7 @@ async function renderRoster(){
 
   const byDept = sortedRosterByDept();
   let rows = '';
-  for(const dept of DEPARTMENTS){
+  for(const dept of orderedDeptNames()){
     const list = byDept[dept]||[];
     if(list.length===0) continue;
     rows += `<tr class="dept-heading"><td colspan="6">${escapeHtml(dept)} — ${list.length}</td></tr>`;
@@ -1678,6 +1783,7 @@ async function boot(){
     document.getElementById('backendWarning').style.display = '';
   }
   await loadAll();
+  initDashboardFilters();
 
   // Restore a previous session (if this browser was already signed in)
   // so a page refresh doesn't sign the user out.
