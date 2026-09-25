@@ -421,7 +421,6 @@
       <div class="login-hint" id="forgotPasswordNote" style="display:none; text-align:left; background:var(--fog); border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px;">
         পাসওয়ার্ড ভুলে গেলে আপনার জাহাজের <b>Admin</b>-এর সাথে যোগাযোগ করুন। Admin আপনার একাউন্টে গিয়ে ("Accounts" ট্যাব থেকে) নতুন পাসওয়ার্ড সেট করে দিতে পারবেন।
       </div>
-      <div class="login-hint">First time here? Default admin login is <b>admin</b> / <b>admin123</b> — please change it after signing in.</div>
       <div class="login-hint" id="backendWarning" style="display:none; color:#a4322a; font-weight:600; margin-top:6px;">
         Backend not connected yet. Open this file, find BACKEND_URL near the top of the &lt;script&gt; section, and paste in your Google Apps Script Web App URL.
       </div>
@@ -453,6 +452,7 @@
   </div>
   <nav class="tabs">
     <button data-tab="dashboard" class="active">Main Dashboard</button>
+    <button data-tab="parade">Daily Parade State</button>
     <button data-tab="roster">Ship's Company (Roster)</button>
     <button data-tab="history">Individual History</button>
     <button data-tab="summary">Monthly Summary</button>
@@ -466,7 +466,7 @@
   <section id="tab-dashboard">
     <div class="panel">
       <div class="panel-head">
-        <h2>Daily Muster</h2>
+        <h2>Daily State</h2>
         <div class="toolbar">
           <div class="field">
             <label class="field-label">Date</label>
@@ -497,6 +497,38 @@
           </table>
         </div>
         <div id="dashEmpty" class="empty-state" style="display:none;">No sailors on the roster yet. Add the ship's company under "Ship's Company (Roster)".</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== DAILY PARADE STATE ===================== -->
+  <section id="tab-parade" style="display:none;">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Daily Parade State</h2>
+        <div class="field">
+          <label class="field-label">Date</label>
+          <input type="date" id="paradeDate">
+        </div>
+      </div>
+      <div class="panel-body">
+        <div style="overflow-x:auto;">
+          <table id="paradeTable">
+            <thead>
+              <tr>
+                <th rowspan="2">Department</th>
+                <th rowspan="2">Total</th>
+                <th rowspan="2">Present</th>
+                <th rowspan="2">Away</th>
+                <th colspan="4" style="text-align:center;">Remarks</th>
+              </tr>
+              <tr>
+                <th>Leave</th><th>Ty</th><th>Admit</th><th>Leave 20%</th>
+              </tr>
+            </thead>
+            <tbody id="paradeTbody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </section>
@@ -585,6 +617,20 @@
 
 </div>
 
+<!-- ===================== NAME LIST POPUP ===================== -->
+<div class="modal-backdrop" id="listModalBackdrop" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="listModalTitle">List</h3>
+      <button class="modal-close" id="listModalClose">&times;</button>
+    </div>
+    <div class="modal-body" id="listModalBody" style="max-height:60vh; overflow-y:auto;"></div>
+    <div class="modal-foot">
+      <button class="btn secondary" id="listModalCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===================== STATUS ENTRY MODAL ===================== -->
 <div class="modal-backdrop" id="statusModalBackdrop" style="display:none;">
   <div class="modal">
@@ -648,6 +694,16 @@ const RANKS = ["MCPO(X)","SCPO(X)","CPO","PO","LS","AB","MCPO(COM)","SCPO(COM)",
 const DEPARTMENTS = ["Navigation (Helmsman)","Navigation (Nav Equipt)","Navigation (Radar ESM)","Navigation (Sonar)",
 "Weapon (Comm)","Weapon (Torpedo Mine)","Weapon (Firing Director)","Weapon (Chemical)",
 "Engineering (Engine Room)","Engineering (Cabin Support System)","Electrical (Electrotec)","Electrical (Navigation & Weapon)","Support Crew"];
+
+// Groupings used only by the "Daily Parade State" summary table.
+const PARADE_GROUPS = [
+  { label:'Navigation', depts:['Navigation (Helmsman)','Navigation (Nav Equipt)','Navigation (Radar ESM)','Navigation (Sonar)'] },
+  { label:'Weapon & Comm', depts:['Weapon (Comm)','Weapon (Torpedo Mine)','Weapon (Firing Director)','Weapon (Chemical)'] },
+  { label:'Engine', depts:['Engineering (Engine Room)'] },
+  { label:'Cabin', depts:['Engineering (Cabin Support System)'] },
+  { label:'Electrical', depts:['Electrical (Electrotec)','Electrical (Navigation & Weapon)'] },
+  { label:'S & S', depts:['Support Crew'] },
+];
 
 const LEAVE_MAX = { PL:60, CL:10, RL:15, ML:28 };
 const SICK_DURATION_MAX = 90;
@@ -859,10 +915,11 @@ document.querySelectorAll('nav.tabs button').forEach(btn=>{
     if((btn.dataset.tab==='roster' || btn.dataset.tab==='accounts') && !isAdmin()) return;
     document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
-    ['dashboard','roster','history','summary','accounts'].forEach(t=>{
+    ['dashboard','parade','roster','history','summary','accounts'].forEach(t=>{
       document.getElementById('tab-'+t).style.display = (t===btn.dataset.tab)?'':'none';
     });
     if(btn.dataset.tab==='dashboard') renderDashboard();
+    if(btn.dataset.tab==='parade') renderParadeState();
     if(btn.dataset.tab==='roster') renderRoster();
     if(btn.dataset.tab==='history') renderHistorySelect();
     if(btn.dataset.tab==='summary') renderSummary();
@@ -877,6 +934,48 @@ function tickClock(){
   });
 }
 setInterval(tickClock, 30000);
+
+/* ---------------------- Name-list popup ---------------------- */
+// items: array of {oNo, name, rank, detail?} — detail is optional extra
+// text (e.g. a date range) shown after the name/rank.
+function showListPopup(title, items){
+  document.getElementById('listModalTitle').textContent = `${title} (${items.length})`;
+  const body = document.getElementById('listModalBody');
+  if(items.length===0){
+    body.innerHTML = '<div class="empty-state">Nobody in this category.</div>';
+  } else {
+    const sorted = [...items].sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+    body.innerHTML = `<table><thead><tr><th>O No</th><th>Name</th><th>Rank</th>${sorted[0].detail!==undefined?'<th>Detail</th>':''}</tr></thead><tbody>` +
+      sorted.map(it=>`<tr>
+        <td data-label="O No" class="oNo">${escapeHtml(it.oNo||'')}</td>
+        <td data-label="Name">${escapeHtml(it.name||'')}</td>
+        <td data-label="Rank">${escapeHtml(it.rank||'')}</td>
+        ${it.detail!==undefined?`<td data-label="Detail" class="muted">${escapeHtml(it.detail||'')}</td>`:''}
+      </tr>`).join('') + `</tbody></table>`;
+  }
+  document.getElementById('listModalBackdrop').style.display = 'flex';
+}
+function closeListPopup(){ document.getElementById('listModalBackdrop').style.display = 'none'; }
+document.getElementById('listModalClose').addEventListener('click', closeListPopup);
+document.getElementById('listModalCloseBtn').addEventListener('click', closeListPopup);
+
+// Makes summary-card elements inside `container` clickable when they carry
+// a data-cat attribute, opening the name-list popup for that category.
+// `listsByCat` maps category key -> array of {oNo,name,rank,detail?}.
+// `titleSuffix` (optional) is appended to the popup title, e.g. a date.
+function wireClickableCards(container, listsByCat, titleSuffix){
+  container.querySelectorAll('.summary-card[data-cat]').forEach(card=>{
+    const cat = card.dataset.cat;
+    const list = listsByCat[cat] || [];
+    card.style.cursor = 'pointer';
+    card.title = 'Click to see names';
+    card.addEventListener('click', ()=>{
+      const label = card.querySelector('.lbl')?.textContent || cat;
+      showListPopup(titleSuffix ? `${label} — ${titleSuffix}` : label, list);
+    });
+  });
+}
+
 
 /* ====================================================================
    DASHBOARD
@@ -936,6 +1035,8 @@ async function renderDashboard(){
   let rows = '';
   let presentCount=0, awayCount=0;
   const bd = { PL:0, CL:0, RL:0, ML:0, SL:0, Ty:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0, Other:0 };
+  const presentList = [], awayList = [];
+  const bdList = { PL:[], CL:[], RL:[], ML:[], SL:[], Ty:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[], Other:[] };
 
   for(const dept of orderedDeptNames()){
     let list = (byDept[dept]||[]).filter(s=>{
@@ -950,19 +1051,20 @@ async function renderDashboard(){
     rows += `<tr class="dept-heading"><td colspan="6">${escapeHtml(dept)} — ${list.length}</td></tr>`;
     for(const s of list){
       const st = await resolveStatus(s.id, date);
-      if(st.status==='Present'){ presentCount++; }
+      const who = { oNo:s.oNo, name:s.name, rank:s.rank };
+      if(st.status==='Present'){ presentCount++; presentList.push(who); }
       else if(st.status==='Away'){
-        awayCount++;
-        if(st.category==='Leave' && bd[st.subType]!==undefined) bd[st.subType]++;
-        else if(st.category==='Ty') bd.Ty++;
+        awayCount++; awayList.push(who);
+        if(st.category==='Leave' && bd[st.subType]!==undefined){ bd[st.subType]++; bdList[st.subType].push(who); }
+        else if(st.category==='Ty'){ bd.Ty++; bdList.Ty.push(who); }
         else if(st.category==='Sick'){
-          if(st.subType==='S-Report') bd.SReport++;
-          else if(st.subType==="Att 'C'") bd.AttC++;
-          else if(st.subType==='PPGF') bd.PPGF++;
-          else if(st.subType==='Uni Ex') bd.UniEx++;
-          else if(st.subType==='Admit') bd.Admit++;
+          if(st.subType==='S-Report'){ bd.SReport++; bdList.SReport.push(who); }
+          else if(st.subType==="Att 'C'"){ bd.AttC++; bdList.AttC.push(who); }
+          else if(st.subType==='PPGF'){ bd.PPGF++; bdList.PPGF.push(who); }
+          else if(st.subType==='Uni Ex'){ bd.UniEx++; bdList.UniEx.push(who); }
+          else if(st.subType==='Admit'){ bd.Admit++; bdList.Admit.push(who); }
         }
-        else if(st.category==='Other') bd.Other++;
+        else if(st.category==='Other'){ bd.Other++; bdList.Other.push(who); }
       }
       const badgeClass = st.status==='Present'?'present':(st.status==='Away'?'away':'pending');
       const hasRecord = !st.isDefault;
@@ -987,25 +1089,33 @@ async function renderDashboard(){
   }
   tbody.innerHTML = rows || `<tr><td colspan="6" class="muted">No sailors match this filter.</td></tr>`;
 
-  document.getElementById('dashSummaryStrip').innerHTML = `
-    <div class="summary-card"><div class="num">${roster.length}</div><div class="lbl">Ship's company</div></div>
-    <div class="summary-card"><div class="num">${presentCount}</div><div class="lbl">Present</div></div>
-    <div class="summary-card"><div class="num">${awayCount}</div><div class="lbl">Away</div></div>
+  const shipsCompanyCount = presentCount + awayCount;
+  const shipsCompanyLabel = deptFilter ? `${deptFilter} — total` : "Ship's company";
+
+  const summaryStripEl = document.getElementById('dashSummaryStrip');
+  summaryStripEl.innerHTML = `
+    <div class="summary-card"><div class="num">${shipsCompanyCount}</div><div class="lbl">${escapeHtml(shipsCompanyLabel)}</div></div>
+    <div class="summary-card" data-cat="Present"><div class="num">${presentCount}</div><div class="lbl">Present</div></div>
+    <div class="summary-card" data-cat="Away"><div class="num">${awayCount}</div><div class="lbl">Away</div></div>
   `;
-  document.getElementById('dashBreakdownStrip').innerHTML = `
-    <div class="summary-card"><div class="num">${bd.PL}</div><div class="lbl">PL</div></div>
-    <div class="summary-card"><div class="num">${bd.CL}</div><div class="lbl">CL</div></div>
-    <div class="summary-card"><div class="num">${bd.RL}</div><div class="lbl">RL</div></div>
-    <div class="summary-card"><div class="num">${bd.ML}</div><div class="lbl">ML</div></div>
-    <div class="summary-card"><div class="num">${bd.SL}</div><div class="lbl">SL</div></div>
-    <div class="summary-card"><div class="num">${bd.Ty}</div><div class="lbl">Ty</div></div>
-    <div class="summary-card"><div class="num">${bd.SReport}</div><div class="lbl">S-Report</div></div>
-    <div class="summary-card"><div class="num">${bd.AttC}</div><div class="lbl">Att 'C'</div></div>
-    <div class="summary-card"><div class="num">${bd.PPGF}</div><div class="lbl">PPGF</div></div>
-    <div class="summary-card"><div class="num">${bd.UniEx}</div><div class="lbl">Uni Ex</div></div>
-    <div class="summary-card"><div class="num">${bd.Admit}</div><div class="lbl">Admit</div></div>
-    <div class="summary-card"><div class="num">${bd.Other}</div><div class="lbl">Other</div></div>
+  wireClickableCards(summaryStripEl, { Present: presentList, Away: awayList }, fmtDate(date));
+
+  const breakdownStripEl = document.getElementById('dashBreakdownStrip');
+  breakdownStripEl.innerHTML = `
+    <div class="summary-card" data-cat="PL"><div class="num">${bd.PL}</div><div class="lbl">PL</div></div>
+    <div class="summary-card" data-cat="CL"><div class="num">${bd.CL}</div><div class="lbl">CL</div></div>
+    <div class="summary-card" data-cat="RL"><div class="num">${bd.RL}</div><div class="lbl">RL</div></div>
+    <div class="summary-card" data-cat="ML"><div class="num">${bd.ML}</div><div class="lbl">ML</div></div>
+    <div class="summary-card" data-cat="SL"><div class="num">${bd.SL}</div><div class="lbl">SL</div></div>
+    <div class="summary-card" data-cat="Ty"><div class="num">${bd.Ty}</div><div class="lbl">Ty</div></div>
+    <div class="summary-card" data-cat="SReport"><div class="num">${bd.SReport}</div><div class="lbl">S-Report</div></div>
+    <div class="summary-card" data-cat="AttC"><div class="num">${bd.AttC}</div><div class="lbl">Att 'C'</div></div>
+    <div class="summary-card" data-cat="PPGF"><div class="num">${bd.PPGF}</div><div class="lbl">PPGF</div></div>
+    <div class="summary-card" data-cat="UniEx"><div class="num">${bd.UniEx}</div><div class="lbl">Uni Ex</div></div>
+    <div class="summary-card" data-cat="Admit"><div class="num">${bd.Admit}</div><div class="lbl">Admit</div></div>
+    <div class="summary-card" data-cat="Other"><div class="num">${bd.Other}</div><div class="lbl">Other</div></div>
   `;
+  wireClickableCards(breakdownStripEl, bdList, fmtDate(date));
 
   tbody.querySelectorAll('[data-update]').forEach(btn=>{
     btn.addEventListener('click', ()=> openStatusModal(btn.dataset.update, date));
@@ -1015,6 +1125,69 @@ async function renderDashboard(){
 document.getElementById('dashDate').addEventListener('change', renderDashboard);
 document.getElementById('dashSearch').addEventListener('input', renderDashboard);
 document.getElementById('dashDeptFilter').addEventListener('change', renderDashboard);
+
+/* ====================================================================
+   DAILY PARADE STATE
+   ==================================================================== */
+async function renderParadeState(){
+  const dateEl = document.getElementById('paradeDate');
+  if(!dateEl.value) dateEl.value = todayStr();
+  const date = dateEl.value;
+  const tbody = document.getElementById('paradeTbody');
+
+  if(roster.length===0){
+    tbody.innerHTML = `<tr><td colspan="8" class="muted">No sailors on the roster yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = `<tr><td colspan="8" class="muted">Loading…</td></tr>`;
+
+  const rowsData = [];
+  let grandTotal=0, grandPresent=0, grandAway=0, grandLeave=0, grandTy=0, grandAdmit=0;
+
+  for(const group of PARADE_GROUPS){
+    const members = roster.filter(s=>group.depts.includes(s.department));
+    const total = members.length;
+    let leave=0, ty=0, admit=0;
+    for(const s of members){
+      const st = await resolveStatus(s.id, date);
+      if(st.status==='Away'){
+        if(st.category==='Leave') leave++;
+        else if(st.category==='Ty') ty++;
+        else if(st.category==='Sick' && st.subType==='Admit') admit++;
+      }
+    }
+    const away = leave+ty+admit;
+    const present = total-away;
+    rowsData.push({ label:group.label, total, present, away, leave, ty, admit });
+    grandTotal+=total; grandPresent+=present; grandAway+=away; grandLeave+=leave; grandTy+=ty; grandAdmit+=admit;
+  }
+
+  tbody.innerHTML = rowsData.map(r=>`
+    <tr>
+      <td data-label="Department">${escapeHtml(r.label)}</td>
+      <td data-label="Total">${r.total}</td>
+      <td data-label="Present">${r.present}</td>
+      <td data-label="Away">${r.away}</td>
+      <td data-label="Leave">${r.leave}</td>
+      <td data-label="Ty">${r.ty}</td>
+      <td data-label="Admit">${r.admit}</td>
+      <td data-label="Leave 20%">${Math.round(r.total*0.2)}</td>
+    </tr>
+  `).join('') + `
+    <tr style="font-weight:600; background:var(--paper);">
+      <td data-label="Department">Total</td>
+      <td data-label="Total">${grandTotal}</td>
+      <td data-label="Present">${grandPresent}</td>
+      <td data-label="Away">${grandAway}</td>
+      <td data-label="Leave">${grandLeave}</td>
+      <td data-label="Ty">${grandTy}</td>
+      <td data-label="Admit">${grandAdmit}</td>
+      <td data-label="Leave 20%">${Math.round(grandTotal*0.2)}</td>
+    </tr>
+  `;
+}
+document.getElementById('paradeDate').addEventListener('change', renderParadeState);
+
 
 /* ---------------------- Status computation ---------------------- */
 // A sailor with no explicit entry for the day, and no active leave/TY/sick
@@ -1616,25 +1789,33 @@ async function renderSummary(){
   gridEl.innerHTML = '';
 
   const counts = { PL:0, CL:0, RL:0, ML:0, SL:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0 };
+  const lists = { PL:[], CL:[], RL:[], ML:[], SL:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[] };
   const SICK_RANGE_KEY = { "Att 'C'":'AttC', "PPGF":'PPGF', "Uni Ex":'UniEx', "Admit":'Admit' };
+  const sailorById = {}; roster.forEach(s=>{ sailorById[s.id]=s; });
+  function pushWho(cat, sailorId, detail){
+    const s = sailorById[sailorId];
+    if(!s) return;
+    counts[cat]++;
+    lists[cat].push({ oNo:s.oNo, name:s.name, rank:s.rank, detail });
+  }
 
   try{
     if(rangeEnd >= monthStart){
       ranges.filter(r=>r.category==='Leave' && r.subType!=='SL' && r.start>=monthStart && r.start<=rangeEnd)
-        .forEach(r=>{ if(counts[r.subType]!==undefined) counts[r.subType]++; });
+        .forEach(r=>{ if(counts[r.subType]!==undefined) pushWho(r.subType, r.sailorId, `${fmtDate(r.start)} – ${fmtDate(r.end)}`); });
 
       // Att 'C' / PPGF / Uni Ex / Admit are multi-day ranges too — each
       // continuous period is one record already, so it's counted once
       // here regardless of how many days it spans.
       ranges.filter(r=>r.category==='Sick' && SICK_RANGE_KEY[r.subType] && r.start>=monthStart && r.start<=rangeEnd)
-        .forEach(r=>{ counts[SICK_RANGE_KEY[r.subType]]++; });
+        .forEach(r=>{ pushWho(SICK_RANGE_KEY[r.subType], r.sailorId, `${fmtDate(r.start)} – ${fmtDate(r.end)}`); });
 
       const datesInWindow = dailyDates.filter(d=> d>=monthStart && d<=rangeEnd);
       for(const d of datesInWindow){
         const log = await getDailyLog(d);
-        Object.values(log).forEach(rec=>{
-          if(rec.category==='Leave' && rec.subType==='SL') counts.SL++;
-          if(rec.category==='Sick' && rec.subType==='S-Report') counts.SReport++;
+        Object.entries(log).forEach(([sailorId,rec])=>{
+          if(rec.category==='Leave' && rec.subType==='SL') pushWho('SL', sailorId, fmtDate(d));
+          if(rec.category==='Sick' && rec.subType==='S-Report') pushWho('SReport', sailorId, fmtDate(d));
         });
       }
     }
@@ -1654,17 +1835,18 @@ async function renderSummary(){
   }
 
   gridEl.innerHTML = `
-    <div class="summary-card"><div class="num">${counts.PL}</div><div class="lbl">Went on PL</div></div>
-    <div class="summary-card"><div class="num">${counts.CL}</div><div class="lbl">Went on CL</div></div>
-    <div class="summary-card"><div class="num">${counts.RL}</div><div class="lbl">Went on RL</div></div>
-    <div class="summary-card"><div class="num">${counts.ML}</div><div class="lbl">Went on ML</div></div>
-    <div class="summary-card"><div class="num">${counts.SL}</div><div class="lbl">Went on SL</div></div>
-    <div class="summary-card"><div class="num">${counts.SReport}</div><div class="lbl">Sick (S-Report)</div></div>
-    <div class="summary-card"><div class="num">${counts.AttC}</div><div class="lbl">Sick — Att 'C'</div></div>
-    <div class="summary-card"><div class="num">${counts.PPGF}</div><div class="lbl">Sick — PPGF</div></div>
-    <div class="summary-card"><div class="num">${counts.UniEx}</div><div class="lbl">Sick — Uni Ex</div></div>
-    <div class="summary-card"><div class="num">${counts.Admit}</div><div class="lbl">Sick — Admit</div></div>
+    <div class="summary-card" data-cat="PL"><div class="num">${counts.PL}</div><div class="lbl">Went on PL</div></div>
+    <div class="summary-card" data-cat="CL"><div class="num">${counts.CL}</div><div class="lbl">Went on CL</div></div>
+    <div class="summary-card" data-cat="RL"><div class="num">${counts.RL}</div><div class="lbl">Went on RL</div></div>
+    <div class="summary-card" data-cat="ML"><div class="num">${counts.ML}</div><div class="lbl">Went on ML</div></div>
+    <div class="summary-card" data-cat="SL"><div class="num">${counts.SL}</div><div class="lbl">Went on SL</div></div>
+    <div class="summary-card" data-cat="SReport"><div class="num">${counts.SReport}</div><div class="lbl">Sick (S-Report)</div></div>
+    <div class="summary-card" data-cat="AttC"><div class="num">${counts.AttC}</div><div class="lbl">Sick — Att 'C'</div></div>
+    <div class="summary-card" data-cat="PPGF"><div class="num">${counts.PPGF}</div><div class="lbl">Sick — PPGF</div></div>
+    <div class="summary-card" data-cat="UniEx"><div class="num">${counts.UniEx}</div><div class="lbl">Sick — Uni Ex</div></div>
+    <div class="summary-card" data-cat="Admit"><div class="num">${counts.Admit}</div><div class="lbl">Sick — Admit</div></div>
   `;
+  wireClickableCards(gridEl, lists, `${fmtDate(monthStart)} – ${asOfLabel}`);
 }
 document.getElementById('summaryDate').addEventListener('change', renderSummary);
 
@@ -1778,6 +1960,7 @@ async function boot(){
   tickClock();
   document.getElementById('dashDate').value = todayStr();
   document.getElementById('summaryDate').value = todayStr();
+  document.getElementById('paradeDate').value = todayStr();
   initDashboardFilters();
   if(!backendConfigured()){
     document.getElementById('backendWarning').style.display = '';
