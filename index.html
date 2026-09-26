@@ -391,6 +391,16 @@
     tr{ border-bottom:1px solid var(--line); padding:8px 0; }
     td{ border-bottom:none; padding:3px 10px; display:flex; justify-content:space-between; gap:10px; }
     td::before{ content: attr(data-label); font-size:11px; color:var(--steel); text-transform:uppercase; }
+
+    /* Tables marked .keep-table stay as a real (scrollable) table on
+       mobile instead of the stacked card layout above — used where the
+       columns need to line up, e.g. Daily Parade State. */
+    table.keep-table{ display:table; width:100%; min-width:560px; }
+    table.keep-table thead{ display:table-header-group; }
+    table.keep-table tbody{ display:table-row-group; }
+    table.keep-table tr{ display:table-row; border-bottom:none; padding:0; }
+    table.keep-table th, table.keep-table td{ display:table-cell; padding:8px 10px; }
+    table.keep-table td::before{ content:none; }
   }
 </style>
 </head>
@@ -513,7 +523,7 @@
       </div>
       <div class="panel-body">
         <div style="overflow-x:auto;">
-          <table id="paradeTable">
+          <table id="paradeTable" class="keep-table">
             <thead>
               <tr>
                 <th rowspan="2">Department</th>
@@ -716,6 +726,7 @@ let accounts = [];        // [{id,username,passwordHash,role,name}]
 const dailyCache = {};    // date -> {sailorId: record}
 
 let editingSailorId = null;
+let expandedDeptName = null; // Main Dashboard accordion: which department is expanded
 let editingDashSailorId = null;
 let editingAccountId = null;
 let currentUser = null;   // in-memory session only (no persistent browser storage)
@@ -944,7 +955,10 @@ function showListPopup(title, items){
   if(items.length===0){
     body.innerHTML = '<div class="empty-state">Nobody in this category.</div>';
   } else {
-    const sorted = [...items].sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+    const sorted = [...items].sort((a,b)=>{
+      if(a.sortDate && b.sortDate && a.sortDate!==b.sortDate) return a.sortDate.localeCompare(b.sortDate);
+      return (a.name||'').localeCompare(b.name||'');
+    });
     body.innerHTML = `<table><thead><tr><th>O No</th><th>Name</th><th>Rank</th>${sorted[0].detail!==undefined?'<th>Detail</th>':''}</tr></thead><tbody>` +
       sorted.map(it=>`<tr>
         <td data-label="O No" class="oNo">${escapeHtml(it.oNo||'')}</td>
@@ -1038,6 +1052,11 @@ async function renderDashboard(){
   const presentList = [], awayList = [];
   const bdList = { PL:[], CL:[], RL:[], ML:[], SL:[], Ty:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[], Other:[] };
 
+  // The department accordion (collapse everyone except the clicked
+  // department) only applies when browsing the full roster — an active
+  // search or department filter always shows matching rows directly.
+  const isBrowsing = !search && !deptFilter;
+
   for(const dept of orderedDeptNames()){
     let list = (byDept[dept]||[]).filter(s=>{
       if(deptFilter && s.department!==deptFilter) return false;
@@ -1048,10 +1067,12 @@ async function renderDashboard(){
       return true;
     });
     if(list.length===0) continue;
-    rows += `<tr class="dept-heading"><td colspan="6">${escapeHtml(dept)} — ${list.length}</td></tr>`;
+    const isExpanded = !isBrowsing || expandedDeptName===dept;
+    const arrow = isBrowsing ? `<span style="display:inline-block; width:14px;">${isExpanded?'▼':'▶'}</span>` : '';
+    rows += `<tr class="dept-heading"${isBrowsing?` data-dept-toggle="${escapeHtml(dept)}" style="cursor:pointer;"`:''}><td colspan="6">${arrow}${escapeHtml(dept)} — ${list.length}</td></tr>`;
     for(const s of list){
       const st = await resolveStatus(s.id, date);
-      const who = { oNo:s.oNo, name:s.name, rank:s.rank };
+      const who = { oNo:s.oNo, name:s.name, rank:s.rank, sortDate: st.start||date };
       if(st.status==='Present'){ presentCount++; presentList.push(who); }
       else if(st.status==='Away'){
         awayCount++; awayList.push(who);
@@ -1066,6 +1087,8 @@ async function renderDashboard(){
         }
         else if(st.category==='Other'){ bd.Other++; bdList.Other.push(who); }
       }
+      if(!isExpanded) continue; // still tallied above, just not rendered as a row
+
       const badgeClass = st.status==='Present'?'present':(st.status==='Away'?'away':'pending');
       const hasRecord = !st.isDefault;
       let updateBtn = '';
@@ -1088,6 +1111,14 @@ async function renderDashboard(){
     }
   }
   tbody.innerHTML = rows || `<tr><td colspan="6" class="muted">No sailors match this filter.</td></tr>`;
+
+  tbody.querySelectorAll('[data-dept-toggle]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const dept = el.dataset.deptToggle;
+      expandedDeptName = (expandedDeptName===dept) ? null : dept;
+      renderDashboard();
+    });
+  });
 
   const shipsCompanyCount = presentCount + awayCount;
   const shipsCompanyLabel = deptFilter ? `${deptFilter} — total` : "Ship's company";
@@ -1209,18 +1240,18 @@ function rangeToStatus(r){
   if(r.category==='Leave'){
     let detail = `${r.subType} (${fmtDate(r.start)} – ${fmtDate(r.end)}, ${r.days||daysBetween(r.start,r.end)+1}d)`;
     if(r.gxs) detail += ` · GXS: ${r.gxs}${r.gxsDate? ' on '+fmtDate(r.gxsDate):''}`;
-    return { status:'Away', label:'Leave · '+r.subType, detail, category:'Leave', subType:r.subType };
+    return { status:'Away', label:'Leave · '+r.subType, detail, category:'Leave', subType:r.subType, start:r.start };
   }
   if(r.category==='Ty'){
-    return { status:'Away', label:'Ty', detail:`${r.location||''} (${fmtDate(r.start)} – ${fmtDate(r.end)})`, category:'Ty' };
+    return { status:'Away', label:'Ty', detail:`${r.location||''} (${fmtDate(r.start)} – ${fmtDate(r.end)})`, category:'Ty', start:r.start };
   }
   if(r.category==='Sick'){
     let detail = `${r.subType} (${fmtDate(r.start)} – ${fmtDate(r.end)})`;
     if(r.location) detail += ` · ${r.location}`;
     if(r.reason) detail += ` · ${r.reason}`;
-    return { status:'Away', label:'Sick · '+r.subType, detail, category:'Sick', subType:r.subType };
+    return { status:'Away', label:'Sick · '+r.subType, detail, category:'Sick', subType:r.subType, start:r.start };
   }
-  return { status:'Away', label:r.category, detail:'', category:r.category };
+  return { status:'Away', label:r.category, detail:'', category:r.category, start:r.start };
 }
 
 /* ====================================================================
@@ -1792,30 +1823,30 @@ async function renderSummary(){
   const lists = { PL:[], CL:[], RL:[], ML:[], SL:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[] };
   const SICK_RANGE_KEY = { "Att 'C'":'AttC', "PPGF":'PPGF', "Uni Ex":'UniEx', "Admit":'Admit' };
   const sailorById = {}; roster.forEach(s=>{ sailorById[s.id]=s; });
-  function pushWho(cat, sailorId, detail){
+  function pushWho(cat, sailorId, detail, sortDate){
     const s = sailorById[sailorId];
     if(!s) return;
     counts[cat]++;
-    lists[cat].push({ oNo:s.oNo, name:s.name, rank:s.rank, detail });
+    lists[cat].push({ oNo:s.oNo, name:s.name, rank:s.rank, detail, sortDate });
   }
 
   try{
     if(rangeEnd >= monthStart){
       ranges.filter(r=>r.category==='Leave' && r.subType!=='SL' && r.start>=monthStart && r.start<=rangeEnd)
-        .forEach(r=>{ if(counts[r.subType]!==undefined) pushWho(r.subType, r.sailorId, `${fmtDate(r.start)} – ${fmtDate(r.end)}`); });
+        .forEach(r=>{ if(counts[r.subType]!==undefined) pushWho(r.subType, r.sailorId, `${fmtDate(r.start)} – ${fmtDate(r.end)}`, r.start); });
 
       // Att 'C' / PPGF / Uni Ex / Admit are multi-day ranges too — each
       // continuous period is one record already, so it's counted once
       // here regardless of how many days it spans.
       ranges.filter(r=>r.category==='Sick' && SICK_RANGE_KEY[r.subType] && r.start>=monthStart && r.start<=rangeEnd)
-        .forEach(r=>{ pushWho(SICK_RANGE_KEY[r.subType], r.sailorId, `${fmtDate(r.start)} – ${fmtDate(r.end)}`); });
+        .forEach(r=>{ pushWho(SICK_RANGE_KEY[r.subType], r.sailorId, `${fmtDate(r.start)} – ${fmtDate(r.end)}`, r.start); });
 
       const datesInWindow = dailyDates.filter(d=> d>=monthStart && d<=rangeEnd);
       for(const d of datesInWindow){
         const log = await getDailyLog(d);
         Object.entries(log).forEach(([sailorId,rec])=>{
-          if(rec.category==='Leave' && rec.subType==='SL') pushWho('SL', sailorId, fmtDate(d));
-          if(rec.category==='Sick' && rec.subType==='S-Report') pushWho('SReport', sailorId, fmtDate(d));
+          if(rec.category==='Leave' && rec.subType==='SL') pushWho('SL', sailorId, fmtDate(d), d);
+          if(rec.category==='Sick' && rec.subType==='S-Report') pushWho('SReport', sailorId, fmtDate(d), d);
         });
       }
     }
