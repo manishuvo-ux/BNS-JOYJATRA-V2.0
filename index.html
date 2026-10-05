@@ -667,6 +667,8 @@
     <div class="modal-body" id="sailorModalBody"></div>
     <div class="modal-foot">
       <button class="btn danger" id="sailorDeleteBtn" style="display:none; margin-right:auto;">Remove sailor</button>
+      <button class="btn secondary" id="sailorReserveBtn" style="display:none;">Reserve</button>
+      <button class="btn secondary" id="sailorRejoinBtn" style="display:none;">Re-Join</button>
       <button class="btn secondary" id="sailorModalCancel">Cancel</button>
       <button class="btn" id="sailorModalSave">Save</button>
     </div>
@@ -1009,10 +1011,15 @@ function initDashboardFilters(){
   if(current) sel.value = current;
 }
 
-function sortedRosterByDept(){
+// includeReserved=true (Roster tab, so admins can still find and manage
+// Reserved sailors). Pass false to exclude them — used anywhere that
+// reflects the ship's current active "state" (Main Dashboard, Daily
+// Parade State, Monthly Summary).
+function sortedRosterByDept(includeReserved){
   const byDept = {};
   DEPARTMENTS.forEach(d=>byDept[d]=[]);
-  roster.forEach(s=>{ (byDept[s.department] = byDept[s.department]||[]).push(s); });
+  const source = includeReserved===false ? roster.filter(s=>!s.reserved) : roster;
+  source.forEach(s=>{ (byDept[s.department] = byDept[s.department]||[]).push(s); });
   Object.values(byDept).forEach(list=>list.sort((a,b)=>(a.order||0)-(b.order||0)));
   return byDept;
 }
@@ -1044,7 +1051,7 @@ async function renderDashboard(){
   }
   emptyEl.style.display='none';
 
-  const byDept = sortedRosterByDept();
+  const byDept = sortedRosterByDept(false);
 
   let rows = '';
   let presentCount=0, awayCount=0;
@@ -1176,7 +1183,7 @@ async function renderParadeState(){
   let grandTotal=0, grandPresent=0, grandAway=0, grandLeave=0, grandTy=0, grandAdmit=0;
 
   for(const group of PARADE_GROUPS){
-    const members = roster.filter(s=>group.depts.includes(s.department));
+    const members = roster.filter(s=>!s.reserved && group.depts.includes(s.department));
     const total = members.length;
     let leave=0, ty=0, admit=0;
     for(const s of members){
@@ -1632,7 +1639,7 @@ async function renderRoster(){
           <button class="icon-btn" data-down="${s.id}" ${idx===list.length-1?'disabled':''} title="Move down">&darr;</button>
         </td>
         <td data-label="O No" class="oNo">${escapeHtml(s.oNo)}</td>
-        <td data-label="Name">${escapeHtml(s.name)}</td>
+        <td data-label="Name">${escapeHtml(s.name)}${s.reserved?' <span class="badge pending">Reserved</span>':''}</td>
         <td data-label="Rank">${escapeHtml(s.rank)}</td>
         <td data-label="Department">${escapeHtml(s.department)}</td>
         <td data-label=""><button class="btn secondary" data-edit="${s.id}">Edit</button></td>
@@ -1673,9 +1680,12 @@ function openSailorModal(sailorId){
   if(!isAdmin()) return;
   editingSailorId = sailorId || null;
   const s = sailorId ? roster.find(x=>x.id===sailorId) : null;
-  document.getElementById('sailorModalTitle').textContent = s ? 'Edit sailor' : 'Add sailor';
+  document.getElementById('sailorModalTitle').textContent = s ? (s.reserved ? 'Edit sailor (Reserved)' : 'Edit sailor') : 'Add sailor';
   document.getElementById('sailorDeleteBtn').style.display = s ? '' : 'none';
+  document.getElementById('sailorReserveBtn').style.display = (s && !s.reserved) ? '' : 'none';
+  document.getElementById('sailorRejoinBtn').style.display = (s && s.reserved) ? '' : 'none';
   sailorBody.innerHTML = `
+    ${s && s.reserved ? `<div class="muted" style="background:var(--fog); border:1px solid var(--line); border-radius:var(--radius); padding:8px 10px;">This sailor is currently <b>Reserved</b> — excluded from the Main Dashboard, Daily Parade State and Monthly Summary. Their records are kept and will reappear once Re-Joined.</div>` : ''}
     <div class="field">
       <label class="field-label">O No</label>
       <input type="text" id="s_oNo" value="${s?escapeHtml(s.oNo):''}" placeholder="e.g. 12345">
@@ -1737,6 +1747,31 @@ document.getElementById('sailorDeleteBtn').addEventListener('click', async ()=>{
   renderDashboard();
 });
 
+document.getElementById('sailorReserveBtn').addEventListener('click', async ()=>{
+  if(!isAdmin() || !editingSailorId) return;
+  const s = roster.find(x=>x.id===editingSailorId);
+  if(!s) return;
+  if(!confirm(`Reserve ${s.name}? They will be excluded from the Main Dashboard, Daily Parade State and Monthly Summary until Re-Joined. Their records are kept.`)) return;
+  s.reserved = true;
+  await saveRoster();
+  closeSailorModal();
+  renderRoster();
+  populateHistorySelect();
+  renderDashboard();
+});
+
+document.getElementById('sailorRejoinBtn').addEventListener('click', async ()=>{
+  if(!isAdmin() || !editingSailorId) return;
+  const s = roster.find(x=>x.id===editingSailorId);
+  if(!s) return;
+  s.reserved = false;
+  await saveRoster();
+  closeSailorModal();
+  renderRoster();
+  populateHistorySelect();
+  renderDashboard();
+});
+
 /* ====================================================================
    HISTORY
    ==================================================================== */
@@ -1752,7 +1787,7 @@ function populateHistorySelect(){
     })
     .sort((a,b)=>a.name.localeCompare(b.name));
   sel.innerHTML = '<option value="">— choose —</option>' + sorted.map(s=>
-    `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.oNo)}, ${escapeHtml(s.rank)})</option>`
+    `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.oNo)}, ${escapeHtml(s.rank)})${s.reserved?' — Reserved':''}</option>`
   ).join('');
   if(current && sorted.some(s=>s.id===current)) sel.value = current;
 }
@@ -1822,7 +1857,7 @@ async function renderSummary(){
   const counts = { PL:0, CL:0, RL:0, ML:0, SL:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0 };
   const lists = { PL:[], CL:[], RL:[], ML:[], SL:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[] };
   const SICK_RANGE_KEY = { "Att 'C'":'AttC', "PPGF":'PPGF', "Uni Ex":'UniEx', "Admit":'Admit' };
-  const sailorById = {}; roster.forEach(s=>{ sailorById[s.id]=s; });
+  const sailorById = {}; roster.forEach(s=>{ if(!s.reserved) sailorById[s.id]=s; });
   function pushWho(cat, sailorId, detail, sortDate){
     const s = sailorById[sailorId];
     if(!s) return;
