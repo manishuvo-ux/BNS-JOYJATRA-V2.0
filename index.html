@@ -21,14 +21,16 @@
     --fog:#eef2f5;
     --paper:#f8f9fa;
     --white:#ffffff;
-    --brass:#b8902f;
-    --brass-light:#e4c574;
-    --ok:#1e7a4c;
-    --ok-bg:#e5f3ea;
-    --warn:#b8902f;
-    --warn-bg:#faf3e2;
-    --danger:#a4322a;
-    --danger-bg:#f7e7e5;
+    /* All accent/status colors are shades of blue, differentiated by
+       lightness/darkness rather than hue. */
+    --brass:#3d7ab5;
+    --brass-light:#8ec4ef;
+    --ok:#1565c0;
+    --ok-bg:#e3f0fb;
+    --warn:#2b6ca3;
+    --warn-bg:#e4eff8;
+    --danger:#0b3d66;
+    --danger-bg:#dbe8f5;
     --line:#d7dee3;
     --radius:3px;
     --font-ui: "Segoe UI", Tahoma, Arial, sans-serif;
@@ -100,7 +102,7 @@
     font-size:10.5px;
     padding:2px 8px;
     border-radius:10px;
-    background:rgba(228,197,116,0.18);
+    background:rgba(142,196,239,0.18);
     color:var(--brass-light);
     letter-spacing:0.3px;
   }
@@ -242,8 +244,8 @@
   .badge.present{ background:var(--ok-bg); color:var(--ok); }
   .badge.away{ background:var(--danger-bg); color:var(--danger); }
   .badge.pending{ background:var(--fog); color:var(--steel); }
-  .badge.role-admin{ background:#eadcc4; color:#7a5a10; }
-  .badge.role-entry{ background:#dcebf0; color:#1a5f7a; }
+  .badge.role-admin{ background:#cfe2f5; color:#0b3d66; }
+  .badge.role-entry{ background:#dcebf7; color:#1565c0; }
   .badge.role-viewer{ background:var(--fog); color:var(--steel); }
 
   .dept-heading{
@@ -333,7 +335,7 @@
   .timeline-desc{ font-size:13.5px; margin-top:2px; }
 
   .saveflash{
-    font-size:11px; color:#8fe3b3; opacity:0; transition:opacity 0.3s;
+    font-size:11px; color:#8ec4ef; opacity:0; transition:opacity 0.3s;
   }
   .saveflash.show{ opacity:1; }
 
@@ -431,7 +433,7 @@
       <div class="login-hint" id="forgotPasswordNote" style="display:none; text-align:left; background:var(--fog); border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px;">
         পাসওয়ার্ড ভুলে গেলে আপনার জাহাজের <b>Admin</b>-এর সাথে যোগাযোগ করুন। Admin আপনার একাউন্টে গিয়ে ("Accounts" ট্যাব থেকে) নতুন পাসওয়ার্ড সেট করে দিতে পারবেন।
       </div>
-      <div class="login-hint" id="backendWarning" style="display:none; color:#a4322a; font-weight:600; margin-top:6px;">
+      <div class="login-hint" id="backendWarning" style="display:none; color:var(--danger); font-weight:600; margin-top:6px;">
         Backend not connected yet. Open this file, find BACKEND_URL near the top of the &lt;script&gt; section, and paste in your Google Apps Script Web App URL.
       </div>
     </div>
@@ -509,6 +511,7 @@
         <div id="dashEmpty" class="empty-state" style="display:none;">No sailors on the roster yet. Add the ship's company under "Ship's Company (Roster)".</div>
       </div>
     </div>
+    <footer class="credit">Programmed by: Md Abu Nirzadul Islam, CPO(QRP-I) &nbsp;·&nbsp; Mob: +8801703-380880</footer>
   </section>
 
   <!-- ===================== DAILY PARADE STATE ===================== -->
@@ -622,8 +625,6 @@
   </section>
 
 </main>
-
-<footer class="credit">Programmed by: Md Abu Nirzadul Islam, CPO(QRP-I) &nbsp;·&nbsp; Mob: +8801703-380880</footer>
 
 </div>
 
@@ -1146,7 +1147,7 @@ async function renderDashboard(){
     <div class="summary-card" data-cat="ML"><div class="num">${bd.ML}</div><div class="lbl">ML</div></div>
     <div class="summary-card" data-cat="SL"><div class="num">${bd.SL}</div><div class="lbl">SL</div></div>
     <div class="summary-card" data-cat="Ty"><div class="num">${bd.Ty}</div><div class="lbl">Ty</div></div>
-    <div class="summary-card" data-cat="SReport"><div class="num">${bd.SReport}</div><div class="lbl">S-Report</div></div>
+    <div class="summary-card" data-cat="SReport"><div class="num">${bd.SReport}</div><div class="lbl">M&amp;D</div></div>
     <div class="summary-card" data-cat="AttC"><div class="num">${bd.AttC}</div><div class="lbl">Att 'C'</div></div>
     <div class="summary-card" data-cat="PPGF"><div class="num">${bd.PPGF}</div><div class="lbl">PPGF</div></div>
     <div class="summary-card" data-cat="UniEx"><div class="num">${bd.UniEx}</div><div class="lbl">Uni Ex</div></div>
@@ -1233,9 +1234,12 @@ document.getElementById('paradeDate').addEventListener('change', renderParadeSta
 // confirm someone ordinary is present. Data entry is only needed for
 // exceptions (away, or a specific duty/task worth noting).
 async function resolveStatus(sailorId, date){
-  const active = ranges.find(r => r.sailorId===sailorId && date>=r.start && date<=r.end);
+  // An empty r.end means "still ongoing, no end date given yet" (used for
+  // Ty and Admit) — such a record stays active for any date on or after
+  // its start, not just up to a fixed end date.
+  const active = ranges.find(r => r.sailorId===sailorId && date>=r.start && (!r.end || date<=r.end));
   if(active){
-    return rangeToStatus(active);
+    return rangeToStatus(active, date);
   }
   const log = await getDailyLog(date);
   const rec = log[sailorId];
@@ -1243,22 +1247,38 @@ async function resolveStatus(sailorId, date){
   return { status:'Present', label:'Present', detail:'', isDefault:true };
 }
 
-function rangeToStatus(r){
+// asOfDate is the date being viewed (dashboard date, today, etc.) — used
+// to compute a running day-count for an open-ended (no end date yet)
+// Ty/Admit record. Falls back to r.start when not given.
+function rangeToStatus(r, asOfDate){
   if(r.category==='Leave'){
     let detail = `${r.subType} (${fmtDate(r.start)} – ${fmtDate(r.end)}, ${r.days||daysBetween(r.start,r.end)+1}d)`;
     if(r.gxs) detail += ` · GXS: ${r.gxs}${r.gxsDate? ' on '+fmtDate(r.gxsDate):''}`;
-    return { status:'Away', label:'Leave · '+r.subType, detail, category:'Leave', subType:r.subType, start:r.start };
+    return { status:'Away', label:'Leave · '+r.subType, detail, category:'Leave', subType:r.subType, start:r.start, end:r.end };
   }
   if(r.category==='Ty'){
-    return { status:'Away', label:'Ty', detail:`${r.location||''} (${fmtDate(r.start)} – ${fmtDate(r.end)})`, category:'Ty', start:r.start };
+    const span = formatRangeSpan(r.start, r.end, asOfDate);
+    return { status:'Away', label:'Ty', detail:`${r.location||''} (${span})`.trim(), category:'Ty', start:r.start, end:r.end };
   }
   if(r.category==='Sick'){
-    let detail = `${r.subType} (${fmtDate(r.start)} – ${fmtDate(r.end)})`;
+    const span = (r.subType==='Admit') ? formatRangeSpan(r.start, r.end, asOfDate) : `${fmtDate(r.start)} – ${fmtDate(r.end)}`;
+    let detail = `${r.subType} (${span})`;
     if(r.location) detail += ` · ${r.location}`;
     if(r.reason) detail += ` · ${r.reason}`;
-    return { status:'Away', label:'Sick · '+r.subType, detail, category:'Sick', subType:r.subType, start:r.start };
+    return { status:'Away', label:'Sick · '+(r.subType==='S-Report'?'M&D':r.subType), detail, category:'Sick', subType:r.subType, start:r.start, end:r.end };
   }
-  return { status:'Away', label:r.category, detail:'', category:r.category, start:r.start };
+  return { status:'Away', label:r.category, detail:'', category:r.category, start:r.start, end:r.end };
+}
+
+// Formats a start/end span for display. When end is empty, the span is
+// "ongoing" and the day count runs up to asOfDate (or today if not given).
+function formatRangeSpan(start, end, asOfDate){
+  if(end){
+    return `${fmtDate(start)} – ${fmtDate(end)}, ${daysBetween(start,end)+1}d`;
+  }
+  const today = asOfDate || todayStr();
+  const days = Math.max(1, daysBetween(start, today)+1);
+  return `${fmtDate(start)} – ongoing, ${days}d`;
 }
 
 /* ====================================================================
@@ -1289,7 +1309,7 @@ function normalizeExisting(existing){
       return { status:'Away', awayType:'Ty', tyFrom:r.start, tyTo:r.end, tyLocation:r.location||'' };
     }
     if(r.category==='Sick'){
-      return { status:'Away', awayType:'Sick', sickSub:r.subType, sickReason:r.reason||'', sickFrom:r.start, sickTo:r.end, sickLocation:r.location||'', sickDays: daysBetween(r.start,r.end)+1 };
+      return { status:'Away', awayType:'Sick', sickSub:r.subType, sickReason:r.reason||'', sickFrom:r.start, sickTo:r.end, sickLocation:r.location||'', sickDays: r.end ? daysBetween(r.start,r.end)+1 : undefined };
     }
     return { status:'Away', awayType:'Other', otherReason:r.reason||'' };
   }
@@ -1416,7 +1436,7 @@ function wireStatusForm(ed){
         <div class="field" style="margin-top:12px;">
           <label class="field-label">Sick category</label>
           <select id="f_sick_sub">
-            ${SICK_SUBTYPES.map(s=>`<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}
+            ${SICK_SUBTYPES.map(s=>`<option value="${escapeHtml(s)}">${escapeHtml(s==='S-Report'?'M&D':s)}</option>`).join('')}
           </select>
         </div>
         <div id="f_sick_dates" style="margin-top:12px;"></div>
@@ -1481,7 +1501,7 @@ function wireStatusForm(ed){
     const box = document.getElementById('f_sick_dates');
     const prefillThis = ed && ed.awayType==='Sick' && ed.sickSub===sub;
     if(sub==='S-Report'){
-      box.innerHTML = `<p class="muted">S-Report is logged for this date only.</p>`;
+      box.innerHTML = `<p class="muted">M&amp;D is logged for this date only.</p>`;
     } else if(sub==='Admit'){
       box.innerHTML = `
         <div class="field-row">
@@ -1585,7 +1605,8 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
     }
   } else if(awayType==='Ty'){
     const from = document.getElementById('f_ty_from').value;
-    const to = document.getElementById('f_ty_to').value || from;
+    // Leaving "To date" blank means still ongoing — no end date yet.
+    const to = document.getElementById('f_ty_to').value || '';
     const location = document.getElementById('f_ty_location').value.trim();
     ranges.push({ id: uid(), sailorId, category:'Ty', start: from, end: to, location, createdAt: Date.now() });
     await saveRanges();
@@ -1594,12 +1615,15 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
     const sub = document.getElementById('f_sick_sub').value;
     if(sub==='S-Report'){
       const log = await getDailyLog(date);
-      log[sailorId] = { status:'Away', label:'Sick · S-Report', detail: 'S-Report' + (reason?(' — '+reason):''), category:'Sick', subType:'S-Report', reason };
+      log[sailorId] = { status:'Away', label:'Sick · M&D', detail: 'M&D' + (reason?(' — '+reason):''), category:'Sick', subType:'S-Report', reason };
       await saveDailyLog(date, log);
       await saveRanges();
     } else {
       const from = document.getElementById('f_sick_from').value;
-      const to = document.getElementById('f_sick_to').value || from;
+      // For Admit, leaving "To date" blank means still admitted (ongoing).
+      // The other sick subtypes always auto-fill "to" from the duration
+      // dropdown, so this only ever applies to Admit.
+      const to = document.getElementById('f_sick_to').value || (sub==='Admit' ? '' : from);
       const location = sub==='Admit' ? (document.getElementById('f_sick_location')||{}).value||'' : '';
       ranges.push({ id: uid(), sailorId, category:'Sick', subType: sub, start: from, end: to, location, reason, createdAt: Date.now() });
       await saveRanges();
@@ -1874,7 +1898,7 @@ async function renderSummary(){
       // continuous period is one record already, so it's counted once
       // here regardless of how many days it spans.
       ranges.filter(r=>r.category==='Sick' && SICK_RANGE_KEY[r.subType] && r.start>=monthStart && r.start<=rangeEnd)
-        .forEach(r=>{ pushWho(SICK_RANGE_KEY[r.subType], r.sailorId, `${fmtDate(r.start)} – ${fmtDate(r.end)}`, r.start); });
+        .forEach(r=>{ pushWho(SICK_RANGE_KEY[r.subType], r.sailorId, formatRangeSpan(r.start, r.end, rangeEnd), r.start); });
 
       const datesInWindow = dailyDates.filter(d=> d>=monthStart && d<=rangeEnd);
       for(const d of datesInWindow){
@@ -1896,7 +1920,7 @@ async function renderSummary(){
 
   const total = counts.PL+counts.CL+counts.RL+counts.ML+counts.SL+counts.SReport+counts.AttC+counts.PPGF+counts.UniEx+counts.Admit;
   if(total===0){
-    gridEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">No leave or sick entries recorded for this month yet.<br>This card only counts PL/CL/RL/ML/SL leave and Sick entries (S-Report, Att 'C', PPGF, Uni Ex, Admit) — Present, TY and Other aren't included here.</div>`;
+    gridEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">No leave or sick entries recorded for this month yet.<br>This card only counts PL/CL/RL/ML/SL leave and Sick entries (M&D, Att 'C', PPGF, Uni Ex, Admit) — Present, TY and Other aren't included here.</div>`;
     return;
   }
 
@@ -1906,7 +1930,7 @@ async function renderSummary(){
     <div class="summary-card" data-cat="RL"><div class="num">${counts.RL}</div><div class="lbl">Went on RL</div></div>
     <div class="summary-card" data-cat="ML"><div class="num">${counts.ML}</div><div class="lbl">Went on ML</div></div>
     <div class="summary-card" data-cat="SL"><div class="num">${counts.SL}</div><div class="lbl">Went on SL</div></div>
-    <div class="summary-card" data-cat="SReport"><div class="num">${counts.SReport}</div><div class="lbl">Sick (S-Report)</div></div>
+    <div class="summary-card" data-cat="SReport"><div class="num">${counts.SReport}</div><div class="lbl">Sick (M&amp;D)</div></div>
     <div class="summary-card" data-cat="AttC"><div class="num">${counts.AttC}</div><div class="lbl">Sick — Att 'C'</div></div>
     <div class="summary-card" data-cat="PPGF"><div class="num">${counts.PPGF}</div><div class="lbl">Sick — PPGF</div></div>
     <div class="summary-card" data-cat="UniEx"><div class="num">${counts.UniEx}</div><div class="lbl">Sick — Uni Ex</div></div>
