@@ -1,9 +1,9 @@
-/* BNS JOYJATRA — service worker.
+/* BNS JOYJATRA â€” service worker.
    Caches only the app shell (this page + icons) so the app can install
    and re-open instantly. All data requests go to Google Apps Script and
-   are always fetched fresh from the network — never cached here. */
+   are always fetched fresh from the network â€” never cached here. */
 
-const CACHE_NAME = 'bns-joyjatra-shell-v1';
+const CACHE_NAME = 'bns-joyjatra-shell-v2';
 const SHELL_FILES = [
   './index.html',
   './manifest.json',
@@ -37,18 +37,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Network-first: always try to fetch the latest file first, so a
+  // replaced index.html shows up on the very next load. The cache is
+  // only used as a fallback when there's no network connection at all.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const network = fetch(event.request)
-        .then((response) => {
-          if (response && response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-          }
-          return response;
-        })
-        .catch(() => cached);
-      return cached || network;
-    })
+    fetch(event.request)
+      .then((response) => {
+        if (response && response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
