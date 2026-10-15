@@ -241,7 +241,11 @@
     font-weight:600;
     letter-spacing:0.2px;
   }
-  .badge.present{ background:var(--ok-bg); color:var(--ok); }
+  .badge.present{ background:#e3f0fb; color:#1565c0; }
+  .badge.leave{ background:#cfe2f5; color:#0d4a80; }
+  .badge.ty{ background:#b9d4ee; color:#0b3d66; }
+  .badge.sick{ background:#a4c6e6; color:#072c4d; }
+  .badge.otheraway{ background:#d7dee3; color:#2d3e4f; }
   .badge.away{ background:var(--danger-bg); color:var(--danger); }
   .badge.pending{ background:var(--fog); color:var(--steel); }
   .badge.role-admin{ background:#cfe2f5; color:#0b3d66; }
@@ -498,6 +502,8 @@
         <div id="dashSummaryStrip" class="summary-grid" style="margin-bottom:10px;"></div>
         <p class="muted" style="margin:0 0 6px 0;">Breakdown</p>
         <div id="dashBreakdownStrip" class="summary-grid" style="margin-bottom:16px;"></div>
+        <p class="muted" style="margin:0 0 6px 0;">Ending Soon — leave/Ty/sick ending the day after this date</p>
+        <div id="dashEndingSoon" style="margin-bottom:16px;"></div>
         <div style="overflow-x:auto;">
           <table id="dashTable">
             <thead>
@@ -1048,6 +1054,7 @@ async function renderDashboard(){
     emptyEl.style.display='';
     document.getElementById('dashSummaryStrip').innerHTML = '';
     document.getElementById('dashBreakdownStrip').innerHTML = '';
+    document.getElementById('dashEndingSoon').innerHTML = '';
     return;
   }
   emptyEl.style.display='none';
@@ -1097,7 +1104,14 @@ async function renderDashboard(){
       }
       if(!isExpanded) continue; // still tallied above, just not rendered as a row
 
-      const badgeClass = st.status==='Present'?'present':(st.status==='Away'?'away':'pending');
+      let badgeClass = 'pending';
+      if(st.status==='Present') badgeClass = 'present';
+      else if(st.status==='Away'){
+        if(st.category==='Leave') badgeClass = 'leave';
+        else if(st.category==='Ty') badgeClass = 'ty';
+        else if(st.category==='Sick') badgeClass = 'sick';
+        else badgeClass = 'otheraway';
+      }
       const hasRecord = !st.isDefault;
       let updateBtn = '';
       if(canEnterData()){
@@ -1105,9 +1119,12 @@ async function renderDashboard(){
           ? '<span class="muted" style="font-size:12px;">Locked (Admin only)</span>'
           : `<button class="btn secondary" data-update="${s.id}">Update</button>`;
       }
-      const detailText = st.isDefault
-        ? 'Not confirmed — assumed present'
+      let detailText = st.isDefault
+        ? ''
         : (st.detail||(st.status==='Present' && st.task ? st.task : ''));
+      if(!st.isDefault && st.enteredBy){
+        detailText += (detailText ? ' · ' : '') + 'by ' + st.enteredBy;
+      }
       rows += `<tr>
         <td data-label="O No" class="oNo">${escapeHtml(s.oNo)}</td>
         <td data-label="Name">${escapeHtml(s.name)}</td>
@@ -1155,6 +1172,37 @@ async function renderDashboard(){
     <div class="summary-card" data-cat="Other"><div class="num">${bd.Other}</div><div class="lbl">Other</div></div>
   `;
   wireClickableCards(breakdownStripEl, bdList, fmtDate(date));
+
+  // "Ending Soon" — anyone whose leave/Ty/sick range ends the day after
+  // the date being viewed, so there's a day's notice before they're due
+  // back. Reserved sailors are left out, same as the rest of the state.
+  const tomorrow = addDays(date, 1);
+  const endingSoonList = ranges
+    .filter(r => r.end && r.end===tomorrow)
+    .map(r => {
+      const s = roster.find(x=>x.id===r.sailorId);
+      if(!s || s.reserved) return null;
+      const category = r.category==='Leave' ? r.subType
+        : r.category==='Ty' ? 'Ty'
+        : (r.subType==='S-Report' ? 'M&D' : r.subType);
+      return { oNo:s.oNo, name:s.name, rank:s.rank, category, end:r.end };
+    })
+    .filter(Boolean)
+    .sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+
+  const endingSoonEl = document.getElementById('dashEndingSoon');
+  if(endingSoonList.length===0){
+    endingSoonEl.innerHTML = `<p class="muted" style="margin:0;">Nobody's leave/Ty/sick ends on ${fmtDate(tomorrow)}.</p>`;
+  } else {
+    endingSoonEl.innerHTML = `<div style="overflow-x:auto;"><table class="keep-table"><thead><tr><th>O No</th><th>Name</th><th>Rank</th><th>Category</th><th>Ends</th></tr></thead><tbody>` +
+      endingSoonList.map(it=>`<tr>
+        <td data-label="O No" class="oNo">${escapeHtml(it.oNo)}</td>
+        <td data-label="Name">${escapeHtml(it.name)}</td>
+        <td data-label="Rank">${escapeHtml(it.rank)}</td>
+        <td data-label="Category">${escapeHtml(it.category)}</td>
+        <td data-label="Ends">${fmtDate(it.end)}</td>
+      </tr>`).join('') + `</tbody></table></div>`;
+  }
 
   tbody.querySelectorAll('[data-update]').forEach(btn=>{
     btn.addEventListener('click', ()=> openStatusModal(btn.dataset.update, date));
@@ -1254,20 +1302,20 @@ function rangeToStatus(r, asOfDate){
   if(r.category==='Leave'){
     let detail = `${r.subType} (${fmtDate(r.start)} – ${fmtDate(r.end)}, ${r.days||daysBetween(r.start,r.end)+1}d)`;
     if(r.gxs) detail += ` · GXS: ${r.gxs}${r.gxsDate? ' on '+fmtDate(r.gxsDate):''}`;
-    return { status:'Away', label:'Leave · '+r.subType, detail, category:'Leave', subType:r.subType, start:r.start, end:r.end };
+    return { status:'Away', label:'Leave · '+r.subType, detail, category:'Leave', subType:r.subType, start:r.start, end:r.end, enteredBy:r.enteredBy };
   }
   if(r.category==='Ty'){
     const span = formatRangeSpan(r.start, r.end, asOfDate);
-    return { status:'Away', label:'Ty', detail:`${r.location||''} (${span})`.trim(), category:'Ty', start:r.start, end:r.end };
+    return { status:'Away', label:'Ty', detail:`${r.location||''} (${span})`.trim(), category:'Ty', start:r.start, end:r.end, enteredBy:r.enteredBy };
   }
   if(r.category==='Sick'){
     const span = (r.subType==='Admit') ? formatRangeSpan(r.start, r.end, asOfDate) : `${fmtDate(r.start)} – ${fmtDate(r.end)}`;
     let detail = `${r.subType} (${span})`;
     if(r.location) detail += ` · ${r.location}`;
     if(r.reason) detail += ` · ${r.reason}`;
-    return { status:'Away', label:'Sick · '+(r.subType==='S-Report'?'M&D':r.subType), detail, category:'Sick', subType:r.subType, start:r.start, end:r.end };
+    return { status:'Away', label:'Sick · '+(r.subType==='S-Report'?'M&D':r.subType), detail, category:'Sick', subType:r.subType, start:r.start, end:r.end, enteredBy:r.enteredBy };
   }
-  return { status:'Away', label:r.category, detail:'', category:r.category, start:r.start, end:r.end };
+  return { status:'Away', label:r.category, detail:'', category:r.category, start:r.start, end:r.end, enteredBy:r.enteredBy };
 }
 
 // Formats a start/end span for display. When end is empty, the span is
@@ -1288,7 +1336,10 @@ const statusBackdrop = document.getElementById('statusModalBackdrop');
 const statusBody = document.getElementById('statusModalBody');
 
 async function getExistingRecord(sailorId, date){
-  const r = ranges.find(x => x.sailorId===sailorId && date>=x.start && date<=x.end);
+  // Same open-ended rule as resolveStatus: an empty x.end means the
+  // record (Ty/Admit) is still ongoing, so it covers any date from its
+  // start onward, not just up to a fixed end date.
+  const r = ranges.find(x => x.sailorId===sailorId && date>=x.start && (!x.end || date<=x.end));
   if(r) return { source:'range', range:r };
   const log = await getDailyLog(date);
   const rec = log[sailorId];
@@ -1341,14 +1392,16 @@ async function openStatusModal(sailorId, date){
   if(!sailor) return;
   document.getElementById('statusModalTitle').textContent = `${sailor.name} — ${fmtDate(date)}`;
 
-  statusBody.innerHTML = statusFormHtml(date);
+  const enteredBy = existing ? (existing.source==='range' ? existing.range.enteredBy : existing.daily.enteredBy) : '';
+  statusBody.innerHTML = statusFormHtml(date, enteredBy);
   wireStatusForm(normalizeExisting(existing));
   document.getElementById('statusDeleteBtn').style.display = (existing && isAdmin()) ? '' : 'none';
   statusBackdrop.style.display = 'flex';
 }
 
-function statusFormHtml(date){
+function statusFormHtml(date, enteredBy){
   return `
+    ${enteredBy ? `<div class="muted" style="background:var(--fog); border:1px solid var(--line); border-radius:var(--radius); padding:6px 10px; font-size:12px;">Last entered by <b>${escapeHtml(enteredBy)}</b></div>` : ''}
     <div class="field">
       <label class="field-label">Status</label>
       <select id="f_status" class="status-select">
@@ -1553,7 +1606,7 @@ document.getElementById('statusDeleteBtn').addEventListener('click', async ()=>{
   const sailorId = editingDashSailorId;
   const date = document.getElementById('f_date').value;
   if(!confirm('Delete this record? The sailor will revert to the default Present status for this date unless another record still applies.')) return;
-  ranges = ranges.filter(r => !(r.sailorId===sailorId && date>=r.start && date<=r.end));
+  ranges = ranges.filter(r => !(r.sailorId===sailorId && date>=r.start && (!r.end || date<=r.end)));
   await saveRanges();
   const log = await getDailyLog(date);
   if(log[sailorId]){
@@ -1569,13 +1622,14 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
   const sailorId = editingDashSailorId;
   const date = document.getElementById('f_date').value;
   const status = document.getElementById('f_status').value;
+  const enteredBy = currentUser ? (currentUser.name || currentUser.username) : '';
 
-  ranges = ranges.filter(r => !(r.sailorId===sailorId && date>=r.start && date<=r.end));
+  ranges = ranges.filter(r => !(r.sailorId===sailorId && date>=r.start && (!r.end || date<=r.end)));
 
   if(status==='Present'){
     const task = document.getElementById('f_task').value.trim();
     const log = await getDailyLog(date);
-    log[sailorId] = { status:'Present', label:'Present', task, detail: task };
+    log[sailorId] = { status:'Present', label:'Present', task, detail: task, enteredBy };
     await saveDailyLog(date, log);
     await saveRanges();
     closeStatusModal();
@@ -1590,7 +1644,7 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
     if(lt==='SL'){
       const reason = (document.getElementById('f_sl_reason')||{}).value || '';
       const log = await getDailyLog(date);
-      log[sailorId] = { status:'Away', label:'Leave · SL', detail: 'Short Leave' + (reason?(' — '+reason):''), category:'Leave', subType:'SL', reason };
+      log[sailorId] = { status:'Away', label:'Leave · SL', detail: 'Short Leave' + (reason?(' — '+reason):''), category:'Leave', subType:'SL', reason, enteredBy };
       await saveDailyLog(date, log);
       await saveRanges();
     } else {
@@ -1600,7 +1654,7 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
       const gxsEl = document.getElementById('f_gxs');
       const gxsDateEl = document.getElementById('f_gxs_date');
       ranges.push({ id: uid(), sailorId, category:'Leave', subType: lt, days, start, end,
-        gxs: gxsEl? gxsEl.value.trim() : '', gxsDate: gxsDateEl? gxsDateEl.value : '', createdAt: Date.now() });
+        gxs: gxsEl? gxsEl.value.trim() : '', gxsDate: gxsDateEl? gxsDateEl.value : '', createdAt: Date.now(), enteredBy });
       await saveRanges();
     }
   } else if(awayType==='Ty'){
@@ -1608,14 +1662,14 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
     // Leaving "To date" blank means still ongoing — no end date yet.
     const to = document.getElementById('f_ty_to').value || '';
     const location = document.getElementById('f_ty_location').value.trim();
-    ranges.push({ id: uid(), sailorId, category:'Ty', start: from, end: to, location, createdAt: Date.now() });
+    ranges.push({ id: uid(), sailorId, category:'Ty', start: from, end: to, location, createdAt: Date.now(), enteredBy });
     await saveRanges();
   } else if(awayType==='Sick'){
     const reason = document.getElementById('f_sick_reason').value.trim();
     const sub = document.getElementById('f_sick_sub').value;
     if(sub==='S-Report'){
       const log = await getDailyLog(date);
-      log[sailorId] = { status:'Away', label:'Sick · M&D', detail: 'M&D' + (reason?(' — '+reason):''), category:'Sick', subType:'S-Report', reason };
+      log[sailorId] = { status:'Away', label:'Sick · M&D', detail: 'M&D' + (reason?(' — '+reason):''), category:'Sick', subType:'S-Report', reason, enteredBy };
       await saveDailyLog(date, log);
       await saveRanges();
     } else {
@@ -1625,13 +1679,13 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
       // dropdown, so this only ever applies to Admit.
       const to = document.getElementById('f_sick_to').value || (sub==='Admit' ? '' : from);
       const location = sub==='Admit' ? (document.getElementById('f_sick_location')||{}).value||'' : '';
-      ranges.push({ id: uid(), sailorId, category:'Sick', subType: sub, start: from, end: to, location, reason, createdAt: Date.now() });
+      ranges.push({ id: uid(), sailorId, category:'Sick', subType: sub, start: from, end: to, location, reason, createdAt: Date.now(), enteredBy });
       await saveRanges();
     }
   } else if(awayType==='Other'){
     const reason = document.getElementById('f_other_reason').value.trim();
     const log = await getDailyLog(date);
-    log[sailorId] = { status:'Away', label:'Other', detail: reason, category:'Other', reason };
+    log[sailorId] = { status:'Away', label:'Other', detail: reason, category:'Other', reason, enteredBy };
     await saveDailyLog(date, log);
     await saveRanges();
   }
@@ -1829,7 +1883,9 @@ document.getElementById('historySailorSelect').addEventListener('change', async 
 
   ranges.filter(r=>r.sailorId===sailorId).forEach(r=>{
     const st = rangeToStatus(r);
-    items.push({ date:r.start, sortKey:r.start, text: `${st.label} — ${st.detail}` });
+    let text = `${st.label} — ${st.detail}`;
+    if(st.enteredBy) text += ` (entered by ${st.enteredBy})`;
+    items.push({ date:r.start, sortKey:r.start, text });
   });
 
   for(const d of dailyDates){
@@ -1839,6 +1895,7 @@ document.getElementById('historySailorSelect').addEventListener('change', async 
       let text;
       if(rec.status==='Present') text = 'Present' + (rec.task ? ' — '+rec.task : '');
       else text = (rec.label||rec.status) + (rec.detail? ' — '+rec.detail : '');
+      if(rec.enteredBy) text += ` (entered by ${rec.enteredBy})`;
       items.push({ date:d, sortKey:d, text });
     }
   }
