@@ -241,11 +241,11 @@
     font-weight:600;
     letter-spacing:0.2px;
   }
-  .badge.present{ background:#e3f0fb; color:#1565c0; }
-  .badge.leave{ background:#cfe2f5; color:#0d4a80; }
-  .badge.ty{ background:#b9d4ee; color:#0b3d66; }
-  .badge.sick{ background:#a4c6e6; color:#072c4d; }
-  .badge.otheraway{ background:#d7dee3; color:#2d3e4f; }
+  .badge.present{ background:#e2f6e9; color:#1e7a4c; }
+  .badge.leave{ background:#fdf0db; color:#a9690a; }
+  .badge.ty{ background:#efe3fb; color:#6a3fa0; }
+  .badge.sick{ background:#fbe2e2; color:#b3261e; }
+  .badge.otheraway{ background:#e3e8ec; color:#4c5c6b; }
   .badge.away{ background:var(--danger-bg); color:var(--danger); }
   .badge.pending{ background:var(--fog); color:var(--steel); }
   .badge.role-admin{ background:#cfe2f5; color:#0b3d66; }
@@ -502,7 +502,7 @@
         <div id="dashSummaryStrip" class="summary-grid" style="margin-bottom:10px;"></div>
         <p class="muted" style="margin:0 0 6px 0;">Breakdown</p>
         <div id="dashBreakdownStrip" class="summary-grid" style="margin-bottom:16px;"></div>
-        <p class="muted" style="margin:0 0 6px 0;">Ending Soon — leave/Ty/sick ending the day after this date</p>
+        <p class="muted" style="margin:0 0 6px 0;">Ending Today — Leave/ Ty/ Sickness</p>
         <div id="dashEndingSoon" style="margin-bottom:16px;"></div>
         <div style="overflow-x:auto;">
           <table id="dashTable">
@@ -1173,12 +1173,10 @@ async function renderDashboard(){
   `;
   wireClickableCards(breakdownStripEl, bdList, fmtDate(date));
 
-  // "Ending Soon" — anyone whose leave/Ty/sick range ends the day after
-  // the date being viewed, so there's a day's notice before they're due
-  // back. Reserved sailors are left out, same as the rest of the state.
-  const tomorrow = addDays(date, 1);
+  // "Ending Today" — anyone whose leave/Ty/sick range ends on the date
+  // being viewed. Reserved sailors are left out, same as the rest of the state.
   const endingSoonList = ranges
-    .filter(r => r.end && r.end===tomorrow)
+    .filter(r => r.end && r.end===date)
     .map(r => {
       const s = roster.find(x=>x.id===r.sailorId);
       if(!s || s.reserved) return null;
@@ -1192,7 +1190,7 @@ async function renderDashboard(){
 
   const endingSoonEl = document.getElementById('dashEndingSoon');
   if(endingSoonList.length===0){
-    endingSoonEl.innerHTML = `<p class="muted" style="margin:0;">Nobody's leave/Ty/sick ends on ${fmtDate(tomorrow)}.</p>`;
+    endingSoonEl.innerHTML = `<p class="muted" style="margin:0;">Nobody's leave/Ty/sickness ends on ${fmtDate(date)}.</p>`;
   } else {
     endingSoonEl.innerHTML = `<div style="overflow-x:auto;"><table class="keep-table"><thead><tr><th>O No</th><th>Name</th><th>Rank</th><th>Category</th><th>Ends</th></tr></thead><tbody>` +
       endingSoonList.map(it=>`<tr>
