@@ -244,6 +244,7 @@
   .badge.present{ background:#e2f6e9; color:#1e7a4c; }
   .badge.leave{ background:#fdf0db; color:#a9690a; }
   .badge.ty{ background:#efe3fb; color:#6a3fa0; }
+  .badge.run{ background:#dcf3f0; color:#0f766e; }
   .badge.sick{ background:#fbe2e2; color:#b3261e; }
   .badge.otheraway{ background:#e3e8ec; color:#4c5c6b; }
   .badge.away{ background:var(--danger-bg); color:var(--danger); }
@@ -1063,9 +1064,9 @@ async function renderDashboard(){
 
   let rows = '';
   let presentCount=0, awayCount=0;
-  const bd = { PL:0, CL:0, RL:0, ML:0, SL:0, Ty:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0, Other:0 };
+  const bd = { PL:0, CL:0, RL:0, ML:0, SL:0, Ty:0, Run:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0, Other:0 };
   const presentList = [], awayList = [];
-  const bdList = { PL:[], CL:[], RL:[], ML:[], SL:[], Ty:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[], Other:[] };
+  const bdList = { PL:[], CL:[], RL:[], ML:[], SL:[], Ty:[], Run:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[], Other:[] };
 
   // The department accordion (collapse everyone except the clicked
   // department) only applies when browsing the full roster — an active
@@ -1093,6 +1094,7 @@ async function renderDashboard(){
         awayCount++; awayList.push(who);
         if(st.category==='Leave' && bd[st.subType]!==undefined){ bd[st.subType]++; bdList[st.subType].push(who); }
         else if(st.category==='Ty'){ bd.Ty++; bdList.Ty.push(who); }
+        else if(st.category==='Run'){ bd.Run++; bdList.Run.push(who); }
         else if(st.category==='Sick'){
           if(st.subType==='S-Report'){ bd.SReport++; bdList.SReport.push(who); }
           else if(st.subType==="Att 'C'"){ bd.AttC++; bdList.AttC.push(who); }
@@ -1109,6 +1111,7 @@ async function renderDashboard(){
       else if(st.status==='Away'){
         if(st.category==='Leave') badgeClass = 'leave';
         else if(st.category==='Ty') badgeClass = 'ty';
+        else if(st.category==='Run') badgeClass = 'run';
         else if(st.category==='Sick') badgeClass = 'sick';
         else badgeClass = 'otheraway';
       }
@@ -1157,20 +1160,17 @@ async function renderDashboard(){
   wireClickableCards(summaryStripEl, { Present: presentList, Away: awayList }, fmtDate(date));
 
   const breakdownStripEl = document.getElementById('dashBreakdownStrip');
-  breakdownStripEl.innerHTML = `
-    <div class="summary-card" data-cat="PL"><div class="num">${bd.PL}</div><div class="lbl">PL</div></div>
-    <div class="summary-card" data-cat="CL"><div class="num">${bd.CL}</div><div class="lbl">CL</div></div>
-    <div class="summary-card" data-cat="RL"><div class="num">${bd.RL}</div><div class="lbl">RL</div></div>
-    <div class="summary-card" data-cat="ML"><div class="num">${bd.ML}</div><div class="lbl">ML</div></div>
-    <div class="summary-card" data-cat="SL"><div class="num">${bd.SL}</div><div class="lbl">SL</div></div>
-    <div class="summary-card" data-cat="Ty"><div class="num">${bd.Ty}</div><div class="lbl">Ty</div></div>
-    <div class="summary-card" data-cat="SReport"><div class="num">${bd.SReport}</div><div class="lbl">M&amp;D</div></div>
-    <div class="summary-card" data-cat="AttC"><div class="num">${bd.AttC}</div><div class="lbl">Att 'C'</div></div>
-    <div class="summary-card" data-cat="PPGF"><div class="num">${bd.PPGF}</div><div class="lbl">PPGF</div></div>
-    <div class="summary-card" data-cat="UniEx"><div class="num">${bd.UniEx}</div><div class="lbl">Uni Ex</div></div>
-    <div class="summary-card" data-cat="Admit"><div class="num">${bd.Admit}</div><div class="lbl">Admit</div></div>
-    <div class="summary-card" data-cat="Other"><div class="num">${bd.Other}</div><div class="lbl">Other</div></div>
-  `;
+  const BREAKDOWN_LABELS = [
+    ['PL','PL'], ['CL','CL'], ['RL','RL'], ['ML','ML'], ['SL','SL'],
+    ['Ty','Ty'], ['Run','Run'],
+    ['SReport','M&amp;D'], ['AttC',"Att 'C'"], ['PPGF','PPGF'], ['UniEx','Uni Ex'], ['Admit','Admit'],
+    ['Other','Other']
+  ];
+  // Only show categories that actually have someone in them today.
+  breakdownStripEl.innerHTML = BREAKDOWN_LABELS
+    .filter(([key]) => bd[key] > 0)
+    .map(([key,label]) => `<div class="summary-card" data-cat="${key}"><div class="num">${bd[key]}</div><div class="lbl">${label}</div></div>`)
+    .join('') || `<p class="muted" style="margin:0;">Nothing to report — everyone is Present.</p>`;
   wireClickableCards(breakdownStripEl, bdList, fmtDate(date));
 
   // "Ending Today" — anyone whose leave/Ty/sick range ends on the date
@@ -1182,6 +1182,7 @@ async function renderDashboard(){
       if(!s || s.reserved) return null;
       const category = r.category==='Leave' ? r.subType
         : r.category==='Ty' ? 'Ty'
+        : r.category==='Run' ? 'Run'
         : (r.subType==='S-Report' ? 'M&D' : r.subType);
       return { oNo:s.oNo, name:s.name, rank:s.rank, category, end:r.end };
     })
@@ -1237,7 +1238,7 @@ async function renderParadeState(){
       const st = await resolveStatus(s.id, date);
       if(st.status==='Away'){
         if(st.category==='Leave') leave++;
-        else if(st.category==='Ty') ty++;
+        else if(st.category==='Ty' || st.category==='Run') ty++; // Run counts alongside Ty here
         else if(st.category==='Sick' && st.subType==='Admit') admit++;
       }
     }
@@ -1306,6 +1307,10 @@ function rangeToStatus(r, asOfDate){
     const span = formatRangeSpan(r.start, r.end, asOfDate);
     return { status:'Away', label:'Ty', detail:`${r.location||''} (${span})`.trim(), category:'Ty', start:r.start, end:r.end, enteredBy:r.enteredBy };
   }
+  if(r.category==='Run'){
+    const span = formatRangeSpan(r.start, r.end, asOfDate);
+    return { status:'Away', label:'Run', detail:`${r.location||''} (${span})`.trim(), category:'Run', start:r.start, end:r.end, enteredBy:r.enteredBy };
+  }
   if(r.category==='Sick'){
     const span = (r.subType==='Admit') ? formatRangeSpan(r.start, r.end, asOfDate) : `${fmtDate(r.start)} – ${fmtDate(r.end)}`;
     let detail = `${r.subType} (${span})`;
@@ -1356,6 +1361,9 @@ function normalizeExisting(existing){
     }
     if(r.category==='Ty'){
       return { status:'Away', awayType:'Ty', tyFrom:r.start, tyTo:r.end, tyLocation:r.location||'' };
+    }
+    if(r.category==='Run'){
+      return { status:'Away', awayType:'Run', runFrom:r.start, runTo:r.end, runLocation:r.location||'' };
     }
     if(r.category==='Sick'){
       return { status:'Away', awayType:'Sick', sickSub:r.subType, sickReason:r.reason||'', sickFrom:r.start, sickTo:r.end, sickLocation:r.location||'', sickDays: r.end ? daysBetween(r.start,r.end)+1 : undefined };
@@ -1419,6 +1427,7 @@ function statusFormHtml(date, enteredBy){
         <select id="f_awayType">
           <option value="Leave">Leave</option>
           <option value="Ty">Ty</option>
+          <option value="Run">Run</option>
           <option value="Sick">Sick</option>
           <option value="Other">Other</option>
         </select>
@@ -1475,6 +1484,18 @@ function wireStatusForm(ed){
         <div class="field" style="margin-top:12px;">
           <label class="field-label">Location</label>
           <input type="text" id="f_ty_location" placeholder="e.g. NHQ Dhaka" value="${escapeHtml(p?(p.tyLocation||''):'')}">
+        </div>
+      `;
+    } else if(t==='Run'){
+      const p = (ed && ed.awayType==='Run') ? ed : null;
+      awaySub.innerHTML = `
+        <div class="field-row">
+          <div class="field"><label class="field-label">From date</label><input type="date" id="f_run_from" value="${p?p.runFrom:date}"></div>
+          <div class="field"><label class="field-label">To date</label><input type="date" id="f_run_to" value="${p?(p.runTo||''):''}"></div>
+        </div>
+        <div class="field" style="margin-top:12px;">
+          <label class="field-label">Location</label>
+          <input type="text" id="f_run_location" placeholder="e.g. at sea" value="${escapeHtml(p?(p.runLocation||''):'')}">
         </div>
       `;
     } else if(t==='Sick'){
@@ -1661,6 +1682,13 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
     const to = document.getElementById('f_ty_to').value || '';
     const location = document.getElementById('f_ty_location').value.trim();
     ranges.push({ id: uid(), sailorId, category:'Ty', start: from, end: to, location, createdAt: Date.now(), enteredBy });
+    await saveRanges();
+  } else if(awayType==='Run'){
+    const from = document.getElementById('f_run_from').value;
+    // Leaving "To date" blank means still ongoing — no end date yet.
+    const to = document.getElementById('f_run_to').value || '';
+    const location = document.getElementById('f_run_location').value.trim();
+    ranges.push({ id: uid(), sailorId, category:'Run', start: from, end: to, location, createdAt: Date.now(), enteredBy });
     await saveRanges();
   } else if(awayType==='Sick'){
     const reason = document.getElementById('f_sick_reason').value.trim();
