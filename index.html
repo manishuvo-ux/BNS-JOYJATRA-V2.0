@@ -409,6 +409,16 @@
     table.keep-table th, table.keep-table td{ display:table-cell; padding:8px 10px; }
     table.keep-table td::before{ content:none; }
   }
+
+  /* ---------- Print (used by Individual History -> Export PDF, via the
+     browser's own "Save as PDF" print destination) ---------- */
+  @media print{
+    body *{ visibility:hidden; }
+    #historyPrintArea, #historyPrintArea *{ visibility:visible; }
+    #historyPrintArea{ position:absolute; left:0; top:0; width:100%; padding:0; margin:0; }
+    .history-print-only{ display:block !important; }
+    .timeline-item{ break-inside:avoid; }
+  }
 </style>
 </head>
 <body>
@@ -587,10 +597,16 @@
             <label class="field-label">Select sailor</label>
             <select id="historySailorSelect"><option value="">— choose —</option></select>
           </div>
+          <div class="field">
+            <label class="field-label">&nbsp;</label>
+            <button class="btn secondary" id="historyExportBtn" style="display:none;">Export PDF</button>
+          </div>
         </div>
       </div>
       <div class="panel-body">
-        <div id="historyBody"><div class="empty-state">Choose a sailor above to view their status history.</div></div>
+        <div id="historyPrintArea">
+          <div id="historyBody"><div class="empty-state">Choose a sailor above to view their status history.</div></div>
+        </div>
       </div>
     </div>
   </section>
@@ -1901,10 +1917,17 @@ document.getElementById('historySearch').addEventListener('input', populateHisto
 document.getElementById('historySailorSelect').addEventListener('change', async (e)=>{
   const sailorId = e.target.value;
   const body = document.getElementById('historyBody');
-  if(!sailorId){ body.innerHTML = '<div class="empty-state">Choose a sailor above to view their status history.</div>'; return; }
+  const exportBtn = document.getElementById('historyExportBtn');
+  if(!sailorId){
+    body.innerHTML = '<div class="empty-state">Choose a sailor above to view their status history.</div>';
+    exportBtn.style.display = 'none';
+    return;
+  }
 
   body.innerHTML = '<div class="empty-state">Loading history…</div>';
+  exportBtn.style.display = 'none';
 
+  const sailor = roster.find(s=>s.id===sailorId);
   const items = [];
 
   ranges.filter(r=>r.sailorId===sailorId).forEach(r=>{
@@ -1928,17 +1951,32 @@ document.getElementById('historySailorSelect').addEventListener('change', async 
 
   items.sort((a,b)=> b.sortKey.localeCompare(a.sortKey));
 
+  const headerHtml = sailor ? `
+    <div class="history-print-header" style="margin-bottom:16px; padding-bottom:10px; border-bottom:1px solid var(--line);">
+      <div style="font-size:16px; font-weight:600; color:var(--navy-deep);">${escapeHtml(sailor.name)}${sailor.reserved?' <span class="badge pending">Reserved</span>':''}</div>
+      <div class="muted">O No: ${escapeHtml(sailor.oNo)} &nbsp;·&nbsp; Rank: ${escapeHtml(sailor.rank)} &nbsp;·&nbsp; ${escapeHtml(sailor.department)}</div>
+      <div class="muted history-print-only" style="display:none;">Exported ${fmtDate(todayStr())}</div>
+    </div>` : '';
+
   if(items.length===0){
-    body.innerHTML = '<div class="empty-state">No status history recorded for this sailor yet.</div>';
+    body.innerHTML = headerHtml + '<div class="empty-state">No status history recorded for this sailor yet.</div>';
+    exportBtn.style.display = sailor ? '' : 'none';
     return;
   }
 
-  body.innerHTML = items.map(it=>`
+  body.innerHTML = headerHtml + items.map(it=>`
     <div class="timeline-item">
       <div class="timeline-date">${fmtDate(it.date)}</div>
       <div class="timeline-desc">${escapeHtml(it.text)}</div>
     </div>
   `).join('');
+  exportBtn.style.display = sailor ? '' : 'none';
+});
+
+document.getElementById('historyExportBtn').addEventListener('click', ()=>{
+  document.querySelectorAll('.history-print-only').forEach(el=> el.style.display='');
+  window.print();
+  document.querySelectorAll('.history-print-only').forEach(el=> el.style.display='none');
 });
 
 /* ====================================================================
