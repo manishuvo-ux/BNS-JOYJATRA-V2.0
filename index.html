@@ -743,7 +743,7 @@ const PARADE_GROUPS = [
 
 const LEAVE_MAX = { PL:60, CL:10, RL:15, ML:28 };
 const SICK_DURATION_MAX = 90;
-const SICK_SUBTYPES = ["S-Report","Att 'C'","PPGF","Uni Ex","Admit"];
+const SICK_SUBTYPES = ["S-Report","Att 'C'","Att 'B'","PPGF","Uni Ex","Ex Boot Shoe","Referred to","Admit"];
 
 let roster = [];          // [{id,oNo,name,rank,department,order}]
 let ranges = [];          // [{id,sailorId,category,subType,start,end,days,gxs,gxsDate,location,reason,createdAt}]
@@ -1080,9 +1080,9 @@ async function renderDashboard(){
 
   let rows = '';
   let presentCount=0, awayCount=0;
-  const bd = { PL:0, CL:0, RL:0, ML:0, SL:0, Ty:0, Run:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0, Other:0 };
+  const bd = { PL:0, CL:0, RL:0, ML:0, SL:0, Ty:0, Run:0, SReport:0, AttC:0, AttB:0, PPGF:0, UniEx:0, ExBootShoe:0, ReferredTo:0, Admit:0, Other:0 };
   const presentList = [], awayList = [];
-  const bdList = { PL:[], CL:[], RL:[], ML:[], SL:[], Ty:[], Run:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[], Other:[] };
+  const bdList = { PL:[], CL:[], RL:[], ML:[], SL:[], Ty:[], Run:[], SReport:[], AttC:[], AttB:[], PPGF:[], UniEx:[], ExBootShoe:[], ReferredTo:[], Admit:[], Other:[] };
 
   // The department accordion (collapse everyone except the clicked
   // department) only applies when browsing the full roster — an active
@@ -1114,8 +1114,11 @@ async function renderDashboard(){
         else if(st.category==='Sick'){
           if(st.subType==='S-Report'){ bd.SReport++; bdList.SReport.push(who); }
           else if(st.subType==="Att 'C'"){ bd.AttC++; bdList.AttC.push(who); }
+          else if(st.subType==="Att 'B'"){ bd.AttB++; bdList.AttB.push(who); }
           else if(st.subType==='PPGF'){ bd.PPGF++; bdList.PPGF.push(who); }
           else if(st.subType==='Uni Ex'){ bd.UniEx++; bdList.UniEx.push(who); }
+          else if(st.subType==='Ex Boot Shoe'){ bd.ExBootShoe++; bdList.ExBootShoe.push(who); }
+          else if(st.subType==='Referred to'){ bd.ReferredTo++; bdList.ReferredTo.push(who); }
           else if(st.subType==='Admit'){ bd.Admit++; bdList.Admit.push(who); }
         }
         else if(st.category==='Other'){ bd.Other++; bdList.Other.push(who); }
@@ -1179,7 +1182,8 @@ async function renderDashboard(){
   const BREAKDOWN_LABELS = [
     ['PL','PL'], ['CL','CL'], ['RL','RL'], ['ML','ML'], ['SL','SL'],
     ['Ty','Ty'], ['Run','Run'],
-    ['SReport','M&amp;D'], ['AttC',"Att 'C'"], ['PPGF','PPGF'], ['UniEx','Uni Ex'], ['Admit','Admit'],
+    ['SReport','M&amp;D'], ['AttC',"Att 'C'"], ['AttB',"Att 'B'"], ['PPGF','PPGF'], ['UniEx','Uni Ex'],
+    ['ExBootShoe','Ex Boot Shoe'], ['ReferredTo','Referred to'], ['Admit','Admit'],
     ['Other','Other']
   ];
   // Only show categories that actually have someone in them today.
@@ -1396,6 +1400,9 @@ function normalizeExisting(existing){
   if(d.category==='Sick' && d.subType==='S-Report'){
     return { status:'Away', awayType:'Sick', sickSub:'S-Report', sickReason:d.reason||'' };
   }
+  if(d.category==='Sick' && d.subType==='Referred to'){
+    return { status:'Away', awayType:'Sick', sickSub:'Referred to', sickReason:d.reason||'', sickReferFor:d.referFor||'', sickReferTo:d.referTo||'' };
+  }
   if(d.category==='Other'){
     return { status:'Away', awayType:'Other', otherReason:d.reason||'' };
   }
@@ -1600,6 +1607,22 @@ function wireStatusForm(ed){
           <label class="field-label">Location (hospital/facility)</label>
           <input type="text" id="f_sick_location" placeholder="e.g. CMH Dhaka" value="${prefillThis?escapeHtml(ed.sickLocation||''):''}">
         </div>`;
+    } else if(sub==='Referred to'){
+      const referOptions = SICK_SUBTYPES.filter(s=>s!=='Referred to');
+      const referForVal = prefillThis ? (ed.sickReferFor||'') : '';
+      box.innerHTML = `
+        <p class="muted">Referred to is logged for this date only.</p>
+        <div class="field">
+          <label class="field-label">Referred for</label>
+          <select id="f_sick_refer_for">
+            ${referOptions.map(s=>`<option value="${escapeHtml(s)}">${escapeHtml(s==='S-Report'?'M&D':s)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field" style="margin-top:12px;">
+          <label class="field-label">Referred to (where)</label>
+          <input type="text" id="f_sick_refer_to" placeholder="e.g. CMH Dhaka" value="${prefillThis?escapeHtml(ed.sickReferTo||''):''}">
+        </div>`;
+      if(referForVal) document.getElementById('f_sick_refer_for').value = referForVal;
     } else {
       let opts='';
       for(let i=1;i<=SICK_DURATION_MAX;i++) opts += `<option value="${i}">${i} day${i>1?'s':''}</option>`;
@@ -1712,6 +1735,14 @@ document.getElementById('statusModalSave').addEventListener('click', async ()=>{
     if(sub==='S-Report'){
       const log = await getDailyLog(date);
       log[sailorId] = { status:'Away', label:'Sick · M&D', detail: 'M&D' + (reason?(' — '+reason):''), category:'Sick', subType:'S-Report', reason, enteredBy };
+      await saveDailyLog(date, log);
+      await saveRanges();
+    } else if(sub==='Referred to'){
+      const referFor = document.getElementById('f_sick_refer_for').value;
+      const referForLabel = referFor==='S-Report' ? 'M&D' : referFor;
+      const referTo = document.getElementById('f_sick_refer_to').value.trim();
+      const log = await getDailyLog(date);
+      log[sailorId] = { status:'Away', label:'Sick · Referred to', detail: `Referred to ${referTo||'—'} for ${referForLabel}` + (reason?(' — '+reason):''), category:'Sick', subType:'Referred to', referFor, referTo, reason, enteredBy };
       await saveDailyLog(date, log);
       await saveRanges();
     } else {
@@ -1999,9 +2030,9 @@ async function renderSummary(){
   labelEl.textContent = `Loading summary of ${fmtDate(monthStart)} to ${asOfLabel}…`;
   gridEl.innerHTML = '';
 
-  const counts = { PL:0, CL:0, RL:0, ML:0, SL:0, SReport:0, AttC:0, PPGF:0, UniEx:0, Admit:0 };
-  const lists = { PL:[], CL:[], RL:[], ML:[], SL:[], SReport:[], AttC:[], PPGF:[], UniEx:[], Admit:[] };
-  const SICK_RANGE_KEY = { "Att 'C'":'AttC', "PPGF":'PPGF', "Uni Ex":'UniEx', "Admit":'Admit' };
+  const counts = { PL:0, CL:0, RL:0, ML:0, SL:0, SReport:0, AttC:0, AttB:0, PPGF:0, UniEx:0, ExBootShoe:0, ReferredTo:0, Admit:0 };
+  const lists = { PL:[], CL:[], RL:[], ML:[], SL:[], SReport:[], AttC:[], AttB:[], PPGF:[], UniEx:[], ExBootShoe:[], ReferredTo:[], Admit:[] };
+  const SICK_RANGE_KEY = { "Att 'C'":'AttC', "Att 'B'":'AttB', "PPGF":'PPGF', "Uni Ex":'UniEx', "Ex Boot Shoe":'ExBootShoe', "Admit":'Admit' };
   const sailorById = {}; roster.forEach(s=>{ if(!s.reserved) sailorById[s.id]=s; });
   function pushWho(cat, sailorId, detail, sortDate){
     const s = sailorById[sailorId];
@@ -2027,6 +2058,7 @@ async function renderSummary(){
         Object.entries(log).forEach(([sailorId,rec])=>{
           if(rec.category==='Leave' && rec.subType==='SL') pushWho('SL', sailorId, fmtDate(d), d);
           if(rec.category==='Sick' && rec.subType==='S-Report') pushWho('SReport', sailorId, fmtDate(d), d);
+          if(rec.category==='Sick' && rec.subType==='Referred to') pushWho('ReferredTo', sailorId, fmtDate(d), d);
         });
       }
     }
@@ -2039,9 +2071,9 @@ async function renderSummary(){
 
   labelEl.textContent = `Summary of ${fmtDate(monthStart)} to ${asOfLabel}`;
 
-  const total = counts.PL+counts.CL+counts.RL+counts.ML+counts.SL+counts.SReport+counts.AttC+counts.PPGF+counts.UniEx+counts.Admit;
+  const total = counts.PL+counts.CL+counts.RL+counts.ML+counts.SL+counts.SReport+counts.AttC+counts.AttB+counts.PPGF+counts.UniEx+counts.ExBootShoe+counts.ReferredTo+counts.Admit;
   if(total===0){
-    gridEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">No leave or sick entries recorded for this month yet.<br>This card only counts PL/CL/RL/ML/SL leave and Sick entries (M&D, Att 'C', PPGF, Uni Ex, Admit) — Present, TY and Other aren't included here.</div>`;
+    gridEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">No leave or sick entries recorded for this month yet.<br>This card only counts PL/CL/RL/ML/SL leave and Sick entries (M&D, Att 'C', Att 'B', PPGF, Uni Ex, Ex Boot Shoe, Referred to, Admit) — Present, TY and Other aren't included here.</div>`;
     return;
   }
 
@@ -2053,8 +2085,11 @@ async function renderSummary(){
     <div class="summary-card" data-cat="SL"><div class="num">${counts.SL}</div><div class="lbl">Went on SL</div></div>
     <div class="summary-card" data-cat="SReport"><div class="num">${counts.SReport}</div><div class="lbl">Sick (M&amp;D)</div></div>
     <div class="summary-card" data-cat="AttC"><div class="num">${counts.AttC}</div><div class="lbl">Sick — Att 'C'</div></div>
+    <div class="summary-card" data-cat="AttB"><div class="num">${counts.AttB}</div><div class="lbl">Sick — Att 'B'</div></div>
     <div class="summary-card" data-cat="PPGF"><div class="num">${counts.PPGF}</div><div class="lbl">Sick — PPGF</div></div>
     <div class="summary-card" data-cat="UniEx"><div class="num">${counts.UniEx}</div><div class="lbl">Sick — Uni Ex</div></div>
+    <div class="summary-card" data-cat="ExBootShoe"><div class="num">${counts.ExBootShoe}</div><div class="lbl">Sick — Ex Boot Shoe</div></div>
+    <div class="summary-card" data-cat="ReferredTo"><div class="num">${counts.ReferredTo}</div><div class="lbl">Sick — Referred to</div></div>
     <div class="summary-card" data-cat="Admit"><div class="num">${counts.Admit}</div><div class="lbl">Sick — Admit</div></div>
   `;
   wireClickableCards(gridEl, lists, `${fmtDate(monthStart)} – ${asOfLabel}`);
